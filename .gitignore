@@ -1,0 +1,13 @@
+data/conversations_cache/
+data/db_catalogs/CO_credito365_schema.json
+.claude/
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.spec
+.pytest_cache/
+.idea/
+.vscode/

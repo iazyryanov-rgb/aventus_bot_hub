@@ -1,0 +1,236 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+from typing import Callable, Optional
+
+from ..alerts import ALERT_TEMPLATES, SCHEDULE_PRESETS, upsert_bot_alert
+from ..data import Company
+
+
+class AlertEditDialog(tk.Toplevel):
+    def __init__(
+        self,
+        master: tk.Misc,
+        company: Company,
+        kind: str,
+        alert: Optional[dict],
+        on_saved: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        super().__init__(master)
+        self._company = company
+        self._kind = kind
+        self._alert = dict(alert) if alert else {}
+        self._on_saved = on_saved
+
+        is_new = not alert
+        self.title("Новый алерт" if is_new else f"Алерт: {alert.get('name', '')}")
+        self.transient(master.winfo_toplevel())
+        self.resizable(False, False)
+        self.columnconfigure(0, weight=1)
+
+        body = ttk.Frame(self, padding=18)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="Имя").grid(row=0, column=0, sticky="w", pady=5)
+        self._name = ttk.Entry(body, width=44)
+        self._name.insert(0, self._alert.get("name", ""))
+        self._name.grid(row=0, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+        ttk.Label(body, text="Шаблон").grid(row=1, column=0, sticky="w", pady=5)
+        self._template_titles = [title for _, title, _ in ALERT_TEMPLATES]
+        self._template_slugs = [slug for slug, _, _ in ALERT_TEMPLATES]
+        self._template = ttk.Combobox(
+            body, values=self._template_titles, state="readonly", width=42
+        )
+        current_slug = self._alert.get("template", self._template_slugs[0])
+        try:
+            self._template.current(self._template_slugs.index(current_slug))
+        except ValueError:
+            self._template.current(0)
+        self._template.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+        ttk.Label(body, text="Триггер").grid(row=2, column=0, sticky="w", pady=5)
+        mode_frame = ttk.Frame(body)
+        mode_frame.grid(row=2, column=1, sticky="w", pady=5, padx=(10, 0))
+        self._mode_var = tk.StringVar(value=self._alert.get("trigger_mode") or "event")
+        ttk.Radiobutton(
+            mode_frame,
+            text="По событию (проверка по интервалу)",
+            variable=self._mode_var,
+            value="event",
+            command=self._on_mode_change,
+        ).pack(side="left", padx=(0, 14))
+        ttk.Radiobutton(
+            mode_frame,
+            text="По времени",
+            variable=self._mode_var,
+            value="time",
+            command=self._on_mode_change,
+        ).pack(side="left")
+
+        ttk.Label(body, text="Периодичность").grid(row=3, column=0, sticky="w", pady=5)
+        self._schedule = ttk.Combobox(body, values=SCHEDULE_PRESETS, width=42)
+        current_schedule = self._alert.get("schedule") or SCHEDULE_PRESETS[0]
+        self._schedule.set(current_schedule)
+        self._schedule.grid(row=3, column=1, sticky="ew", pady=5, padx=(10, 0))
+
+        self._st_label = ttk.Label(body, text="Время старта")
+        self._st_label.grid(row=4, column=0, sticky="w", pady=5)
+        st_frame = ttk.Frame(body)
+        st_frame.grid(row=4, column=1, sticky="w", pady=5, padx=(10, 0))
+        self._st_frame = st_frame
+
+        current_st = self._alert.get("start_time", "") or ""
+        if current_st and ":" in current_st:
+            try:
+                _h_str, _m_str = current_st.split(":", 1)
+                init_h, init_m = int(_h_str), int(_m_str)
+            except ValueError:
+                init_h, init_m = 9, 0
+        else:
+            init_h, init_m = 9, 0
+
+        self._st_use = tk.BooleanVar(value=bool(current_st))
+        self._st_hour = tk.StringVar(value=f"{init_h:02d}")
+        self._st_min = tk.StringVar(value=f"{init_m:02d}")
+
+        ttk.Checkbutton(
+            st_frame,
+            text="Использовать",
+            variable=self._st_use,
+            command=self._on_start_toggle,
+        ).pack(side="left", padx=(0, 12))
+
+        self._st_hour_box = ttk.Spinbox(
+            st_frame,
+            from_=0,
+            to=23,
+            width=3,
+            format="%02.0f",
+            textvariable=self._st_hour,
+            wrap=True,
+        )
+        self._st_hour_box.pack(side="left")
+        ttk.Label(st_frame, text=":").pack(side="left", padx=2)
+        self._st_min_box = ttk.Spinbox(
+            st_frame,
+            from_=0,
+            to=59,
+            increment=5,
+            width=3,
+            format="%02.0f",
+            textvariable=self._st_min,
+            wrap=True,
+        )
+        self._st_min_box.pack(side="left")
+        self._on_start_toggle()
+
+        self._st_hint = ttk.Label(
+            body,
+            text="в таймзоне компании · без галочки — считать от старта приложения",
+            foreground="#6b7280",
+        )
+        self._st_hint.grid(row=5, column=1, sticky="w", padx=(10, 0))
+
+        ttk.Label(body, text="Заметки").grid(row=6, column=0, sticky="nw", pady=(10, 5))
+        self._notes = tk.Text(body, width=44, height=4, wrap="word")
+        self._notes.insert("1.0", self._alert.get("notes", ""))
+        self._notes.grid(row=6, column=1, sticky="ew", pady=(10, 5), padx=(10, 0))
+
+        self._enabled_var = tk.BooleanVar(value=self._alert.get("enabled", True))
+        ttk.Checkbutton(
+            body, text="Включён", variable=self._enabled_var
+        ).grid(row=7, column=1, sticky="w", pady=(8, 0), padx=(10, 0))
+
+        self._wh_var = tk.BooleanVar(
+            value=bool(self._alert.get("working_hours_only", False))
+        )
+        ttk.Checkbutton(
+            body,
+            text="Только в рабочее время (Пн–Пт, 09:00–18:00 локально)",
+            variable=self._wh_var,
+        ).grid(row=8, column=1, sticky="w", pady=(2, 0), padx=(10, 0))
+
+        self._on_mode_change()
+
+        btns = ttk.Frame(self, padding=(18, 0, 18, 18))
+        btns.grid(row=1, column=0, sticky="ew")
+        ttk.Button(btns, text="Отмена", command=self.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(btns, text="Сохранить", command=self._save).pack(side="right")
+
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.update_idletasks()
+        try:
+            tgt = master.winfo_toplevel()
+            mx = tgt.winfo_rootx()
+            my = tgt.winfo_rooty()
+            mw = tgt.winfo_width()
+            mh = tgt.winfo_height()
+            w = self.winfo_width()
+            h = self.winfo_height()
+            self.geometry(f"+{mx + max(0, (mw - w) // 2)}+{my + max(0, (mh - h) // 3)}")
+        except tk.TclError:
+            pass
+        self.grab_set()
+        self._name.focus_set()
+
+    def _on_start_toggle(self) -> None:
+        state = "normal" if self._st_use.get() else "disabled"
+        self._st_hour_box.configure(state=state)
+        self._st_min_box.configure(state=state)
+
+    def _on_mode_change(self) -> None:
+        if self._mode_var.get() == "time":
+            self._st_label.grid()
+            self._st_frame.grid()
+            self._st_hint.grid()
+        else:
+            self._st_label.grid_remove()
+            self._st_frame.grid_remove()
+            self._st_hint.grid_remove()
+
+    def _save(self) -> None:
+        name = self._name.get().strip()
+        if not name:
+            messagebox.showerror("Ошибка", "Введите имя алерта.", parent=self)
+            return
+        idx = self._template.current()
+        if idx < 0:
+            messagebox.showerror("Ошибка", "Выберите шаблон.", parent=self)
+            return
+        mode = self._mode_var.get() or "event"
+        if mode == "time" and self._st_use.get():
+            try:
+                h = int(self._st_hour.get().strip())
+                m = int(self._st_min.get().strip())
+                if not (0 <= h <= 23 and 0 <= m <= 59):
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(
+                    "Ошибка",
+                    "Время старта должно быть HH:MM (00–23, 00–59).",
+                    parent=self,
+                )
+                return
+            start_time = f"{h:02d}:{m:02d}"
+        else:
+            start_time = ""
+        new_alert = {
+            **self._alert,
+            "name": name,
+            "template": self._template_slugs[idx],
+            "schedule": self._schedule.get().strip() or SCHEDULE_PRESETS[0],
+            "trigger_mode": mode,
+            "start_time": start_time,
+            "notes": self._notes.get("1.0", "end").strip(),
+            "enabled": bool(self._enabled_var.get()),
+            "working_hours_only": bool(self._wh_var.get()),
+        }
+        try:
+            saved = upsert_bot_alert(self._company.key, self._kind, new_alert)
+        except OSError as exc:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить:\n{exc}", parent=self)
+            return
+        if self._on_saved:
+            self._on_saved(saved)
+        self.destroy()

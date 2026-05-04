@@ -1,0 +1,7 @@
+{
+  "_comment": "Активная версия справочника на компанию (active_version). catalog_bot_id — тип бота в дереве слева, без отметки которого catalog.json не открывается (см. Get-HubBotChannelDefinitions в AventusBotHub.ps1).",
+  "CO_": { "active_version": "2026-04-28", "catalog_bot_id": "whatsapp_infobip" },
+  "AR_": { "active_version": "2026-04-28", "catalog_bot_id": "whatsapp_infobip" },
+  "PE_": { "active_version": "2026-04-28", "catalog_bot_id": "whatsapp_infobip" },
+  "CO2_": { "active_version": "2026-04-28", "catalog_bot_id": "whatsapp_infobip" }
+}

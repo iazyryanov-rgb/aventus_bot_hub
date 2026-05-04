@@ -1,0 +1,284 @@
+{
+  "catalog_version": "2026-04-28",
+  "project_index": "AR_",
+  "company": {
+    "display_name": "Lendi",
+    "legal_context": "Lendi Argentina — cobranza",
+    "country": "AR",
+    "schema_reference": "whatsapp-infobip-credito365-prod-schema.json (Webitel): set__54239123f8c944b3 Prompt AR_, httpRequest__847c788cb56c4076 / cd2239798e734c60 CRM lookup AR_"
+  },
+  "wa_promt_gpt": {
+    "flow_variable": "wa_promt_gpt",
+    "source_file": "wa_promt_gpt.txt",
+    "encoding": "utf-8",
+    "schema_node": "set__54239123f8c944b3",
+    "note": "Texto extraído del valor wa_promt_gpt del nodo Prompt AR_ en el JSON de producción."
+  },
+  "openai_style_rules": {
+    "append_to_developer_message": [
+      "Always respond in Argentinian Spanish",
+      "Keep responses concise, natural, ready to send",
+      "No markdown, no formatting, no links",
+      "Do not invent data",
+      "If critical info is missing -> offer transfer to human agent"
+    ],
+    "schema_reference": "httpRequest OpenAI developer message en mismo prod-schema (Argentinian Spanish)."
+  },
+  "crm": {
+    "client_lookup_by_phone": {
+      "allow_empty_export_variables": true,
+      "allow_empty_export_reason": "whatsapp-infobip-credito365-prod-schema: nodos Lendi con exportVariables []. Completar cuando API documente respuesta.",
+      "description": "Lendi AR: GET estado cliente por teléfono (main y página test). En el JSON de prod exportVariables está vacío — mapeo CRM→canal cuando API lo defina.",
+      "unified_variable_contract": "Misma convención de nombres en flujo que CO (amount, client_full_name, …) cuando existan exportVariables.",
+      "primary_request": {
+        "id": "client_lookup_main_destination",
+        "schema_tag": "httpRequest__847c788cb56c4076",
+        "page_id": "main",
+        "method": "GET",
+        "url_template": "https://api.lendi.ar/api/webhook/webitel/${destination}/status",
+        "timeout_ms": 10000,
+        "insecure_skip_verify": false,
+        "response_code_variable": "http_response_code",
+        "export_cookie_name": "my-cookie",
+        "use_cache": false,
+        "request_data": "{}",
+        "parser": "application/json",
+        "headers": [
+          {
+            "key": "Authorization",
+            "value": "${PARTNER-API-KEY}"
+          }
+        ],
+        "export_variables": []
+      },
+      "alternate_request": {
+        "id": "client_lookup_test_user",
+        "schema_tag": "httpRequest__cd2239798e734c60",
+        "page_id": "3f3881fc-6a33-4bd2-ad7c-3a23efa34965",
+        "method": "GET",
+        "url_template": "https://api.lendi.ar/api/webhook/webitel/${user}/status",
+        "timeout_ms": 10000,
+        "insecure_skip_verify": false,
+        "response_code_variable": "http_response_code",
+        "export_cookie_name": "my-cookie",
+        "headers": [
+          {
+            "key": "Authorization",
+            "value": "${PARTNER-API-KEY}"
+          }
+        ],
+        "export_variables": []
+      },
+      "routing_switch": {
+        "schema_tag": "switch__acde2176c4b8496e",
+        "variable": "${project_index}",
+        "case_AR_": "rama a httpRequest__847c788cb56c4076"
+      }
+    },
+    "result_submit": {
+      "_excluded_by_request": true,
+      "primary": {},
+      "note": "Registro resultado CRM AR (webitel_phone_result) no incluido en catálogo por petición. Nodo en prod: descripción «CRM registration: AR_ Lendi», URL https://api.lendi.ar/api/webhook/webitel_phone_result"
+    }
+  },
+  "taxonomy": {
+    "contact_type": [
+      {
+        "id": "contact_type_client",
+        "label_es": "Cliente titular",
+        "crm_value": "contact_type_client"
+      },
+      {
+        "id": "third_party_contact",
+        "label_es": "Tercero (no titular)",
+        "crm_value": "third_party_contact"
+      }
+    ],
+    "crm_call_type": [
+      { "id": "type_inbound_wa_bot", "label": "WA bot inbound (prod path)" },
+      { "id": "action_type_whatsapp", "label": "WA acción / post-registro" }
+    ],
+    "contact_result": [
+      {
+        "id": "other",
+        "label_es": "Otro",
+        "children": {}
+      },
+      {
+        "id": "contact_result_provided_client_contact_info",
+        "label_es": "Proporcionó datos de contacto",
+        "children": {}
+      },
+      {
+        "id": "contact_result_refusal_to_transfer_information",
+        "label_es": "Rechazo a transferir información",
+        "children": {}
+      },
+      {
+        "id": "contact_result_promise_of_payment",
+        "label_es": "Promesa de pago",
+        "children": {
+          "promise_type": [
+            { "id": "promise_type_full_payment", "label_es": "Pago total" },
+            { "id": "promise_type_partial_payment", "label_es": "Pago parcial" },
+            { "id": "promise_type_discount", "label_es": "Pago con descuento" },
+            { "id": "promise_type_extension", "label_es": "Extensión / prórroga" },
+            { "id": "no_promise", "label_es": "Sin promesa (seguimiento)" },
+            { "id": "default", "label_es": "Default" }
+          ]
+        }
+      },
+      {
+        "id": "contact_result_already_payed",
+        "label_es": "Ya pagó (declarado)",
+        "children": {}
+      },
+      {
+        "id": "contact_result_ptp_follow_up",
+        "label_es": "Seguimiento PTP",
+        "children": {}
+      },
+      {
+        "id": "contact_result_refusal_to_pay",
+        "label_es": "Negativa a pagar",
+        "children": {}
+      },
+      {
+        "id": "customer_with_current_agreement",
+        "label_es": "Cliente con acuerdo vigente",
+        "children": {}
+      },
+      {
+        "id": "contact_result_paid_after_wa",
+        "label_es": "Pago después del WA",
+        "children": {}
+      }
+    ],
+    "schema_note": "Misma página de finalización compartida en prod-schema (page 1e5656f5-9b99-4a29-8296-8de4e001ea82) que Credito365 CO; taxonomía alineada a switches allí."
+  },
+  "result_mapping": {
+    "tab": "result_mapping",
+    "trusted_CO_branch_literals": "Mientras el flujo comparta la página result mapping con CO, los literales de switch = CRM 1:1 según trusted-sources.json → CO_.result_mapping_schema (mismo que catálogo CO).",
+    "description": "Tras separar schema AR, duplicar aquí solo las filas cuyo crm_value difiera de la API Lendi.",
+    "pattern": "switch → set variable → crm_value (AR_: por defecto igual que build CO referenciado)",
+    "contact_client_to_contact_type": [
+      { "switch_branch": "contact_type_client", "set_variable": "contact_type", "crm_value": "contact_type_client" },
+      { "switch_branch": "third_party_contact", "set_variable": "contact_type", "crm_value": "third_party_contact" }
+    ],
+    "contact_result": [
+      { "switch_branch": "other", "set_variable": "contact_result", "crm_value": "other" },
+      { "switch_branch": "contact_result_provided_client_contact_info", "set_variable": "contact_result", "crm_value": "contact_result_provided_client_contact_info" },
+      { "switch_branch": "contact_result_refusal_to_transfer_information", "set_variable": "contact_result", "crm_value": "contact_result_refusal_to_transfer_information" },
+      { "switch_branch": "contact_result_promise_of_payment", "set_variable": "contact_result", "crm_value": "contact_result_promise_of_payment" },
+      { "switch_branch": "contact_result_already_payed", "set_variable": "contact_result", "crm_value": "contact_result_already_payed" },
+      { "switch_branch": "contact_result_ptp_follow_up", "set_variable": "contact_result", "crm_value": "contact_result_ptp_follow_up" },
+      { "switch_branch": "contact_result_refusal_to_pay", "set_variable": "contact_result", "crm_value": "contact_result_refusal_to_pay" },
+      { "switch_branch": "customer_with_current_agreement", "set_variable": "contact_result", "crm_value": "customer_with_current_agreement" },
+      { "switch_branch": "contact_result_paid_after_wa", "set_variable": "contact_result", "crm_value": "contact_result_paid_after_wa" }
+    ],
+    "promise_type": [
+      { "switch_branch": "promise_type_full_payment", "set_variable": "promise_type", "crm_value": "promise_type_full_payment" },
+      { "switch_branch": "promise_type_partial_payment", "set_variable": "promise_type", "crm_value": "promise_type_partial_payment" },
+      { "switch_branch": "promise_type_discount", "set_variable": "promise_type", "crm_value": "promise_type_discount" },
+      { "switch_branch": "promise_type_extension", "set_variable": "promise_type", "crm_value": "promise_type_extension" },
+      { "switch_branch": "no_promise", "set_variable": "promise_type", "crm_value": "no_promise" },
+      { "switch_branch": "default", "set_variable": "promise_type", "crm_value": "default" }
+    ]
+  },
+  "final_messages": {
+    "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+    "description": "Textos sendText tras resultado (flujo multi-país compartido en prod-schema; copy mayormente ES neutro/LatAm).",
+    "contact_results_sin_sendtext_en_export": [
+      "other",
+      "contact_result_already_payed",
+      "contact_result_ptp_follow_up",
+      "promise_type no_promise",
+      "promise_type default"
+    ],
+    "by_contact_result": {
+      "contact_result_refusal_to_pay": {
+        "text": "${client_full_name}, lamentamos mucho no haber podido resolver el problema del pago de forma voluntaria.\nContinuaremos con las gestiones de cobro hasta que usted cumpla con sus obligaciones.\nHemos registrado información sobre su negativa a pagar.",
+        "schema_tag": "sendText__b573bb6cc3413ebe"
+      },
+      "contact_result_paid_after_wa": {
+        "text": "${client_full_name}, gracias por tu pago. Aún no hemos recibido tu información de pago.\n\nVerificaremos esta información y nos pondremos en contacto contigo si es necesario. ¡Que tengas un buen día!",
+        "schema_tag": "sendText__6c2068babfffc887"
+      },
+      "contact_result_promise_of_payment": {
+        "by_promise_type": {
+          "promise_type_full_payment": {
+            "variants": [
+              {
+                "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount} antes del ${promise_date}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nPodrá solicitar un nuevo préstamo inmediatamente después de realizar el pago. ¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+                "schema_tag": "sendText__713b0ad44bce2ce3"
+              },
+              {
+                "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount} $ ${currency_index} antes del ${promise_date}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nPodrá solicitar un nuevo préstamo inmediatamente después de realizar el pago. ¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+                "schema_tag": "sendText__cd6dc01c5e23dd74"
+              }
+            ]
+          },
+          "promise_type_partial_payment": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount}  $ ${currency_index} antes del ${promise_dt}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nUn pago parcial no cubre la totalidad del préstamo. Por favor, realice los pagos a tiempo.\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+            "schema_tag": "sendText__dca9483c51490a46"
+          },
+          "promise_type_discount": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${discount_payment} $ ${currency_index}del ${promise_dt}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\n¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+            "schema_tag": "sendText__604d4d1b4a90f082"
+          },
+          "promise_type_extension": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${extension_min_payment}  $ ${currency_index} antes del ${promise_dt}.\n\nPuede consultar la información del préstamo en su cuenta personal en ${short_link}.\n\nAl extender el plazo del préstamo, ¡extiende el tiempo durante el cual puede usar los fondos prestados!\nTenga en cuenta las consecuencias negativas del impago.",
+            "schema_tag": "sendText__02bba3a32e75ca07"
+          }
+        }
+      },
+      "customer_with_current_agreement": {
+        "text": "¡Estamos encantados de ayudarte en cualquier momento!\n\n¡Gracias por elegir Lendi y que tengas un buen día! ",
+        "schema_tag": "sendText__41cc61e5ba2c07a3"
+      },
+      "contact_result_provided_client_contact_info": {
+        "text": "${client_full_name}, gracias por la información!\n\n¡Gracias por usar nuestros servicios! ¡Adiós!",
+        "schema_tag": "sendText__c4a269414c970ace"
+      },
+      "contact_result_refusal_to_transfer_information": {
+        "text": "¡Gracias! Disculpe las molestias, ¡que tenga un buen día!",
+        "schema_tag": "sendText__b4e79588dc4e9364"
+      },
+      "generic_error": {
+        "text": "¡Disculpe, hubo un error! ¡Disculpe las molestias, que tenga un buen día!",
+        "schema_tag": "sendText__4376d52b7361fdab"
+      }
+    }
+  },
+  "testers": {
+    "description": "Números de prueba; variable test_owner en flujo",
+    "people": [
+      {
+        "display_name": "Salvador Vicente Calogero",
+        "company": "Lendi",
+        "phone_e164": "+5491130923218",
+        "phone_digits": "5491130923218",
+        "test_owner_key": "Salvador Vicente Calogero"
+      },
+      {
+        "display_name": "Juan Sanchez",
+        "company": "Lendi",
+        "phone_e164": "+5491126751147",
+        "phone_digits": "5491126751147",
+        "test_owner_key": "Juan Sanchez"
+      },
+      {
+        "display_name": "Ivan Zyrianov",
+        "company": "Lendi",
+        "phone_e164": "+79100096386",
+        "phone_digits": "79100096386",
+        "test_owner_key": "Ivan Zyrianov"
+      }
+    ]
+  },
+  "process_names": {
+    "test": "WA_bot_AR_results_test",
+    "prod": "WA_bot_AR_results_prod",
+    "schema_template": "WA_bot_${project_index}results_test / prod (set en prod-schema main)"
+  }
+}

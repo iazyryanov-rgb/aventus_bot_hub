@@ -1,0 +1,6 @@
+{
+  "_comment": "Эталонные файлы схемы для синхронизации каталогов. Меняй путь при новом билде.",
+  "CO_": {
+    "result_mapping_schema": "C:/Users/Ivan/Documents/WA bot/schemas/current/whatsapp-infobip-credito365-prod.json"
+  }
+}

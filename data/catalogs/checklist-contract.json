@@ -1,0 +1,8 @@
+{
+  "_comment": "Пороги для catalog-checklist.mjs. При необходимости ослабь min_* или добавь исключения.",
+  "wa_promt_gpt_min_chars": 100,
+  "wa_promt_gpt_reject_if_starts_with": "TODO",
+  "taxonomy_min_contact_result_nodes": 1,
+  "crm_client_lookup_min_export_mappings": 1,
+  "warn_if_testers_empty": true
+}

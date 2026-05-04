@@ -1,0 +1,34 @@
+{
+    "AR_":  {
+                "name":  "Lendi",
+                "country":  "Argentina",
+                "webitel_host":  "https://aventus-ar.webitel.com",
+                "access_token":  "s366p8switn3xj8h4gginssady",
+                "schema_id":  54,
+                "schema_name":  "whatsapp-infobip-lendi-prod"
+            },
+    "CO_":  {
+                "name":  "Credito365",
+                "country":  "Colombia",
+                "webitel_host":  "https://aventus.us-east.webitel.com",
+                "access_token":  "mmd3tbfpcfd9zqmfxic5epo11c",
+                "schema_id":  110,
+                "schema_name":  "whatsapp-infobip-credito365-prod"
+            },
+    "PE_":  {
+                "name":  "Prestamo365",
+                "country":  "Peru",
+                "webitel_host":  "https://aventus.sa-east-1.webitel.com",
+                "access_token":  "ubxygcr6j7fepxtr3e6jo1xrga",
+                "schema_id":  80,
+                "schema_name":  "whatsapp-infobip-prestamo365-prod"
+            },
+    "CO2_":  {
+                 "name":  "TuParcero",
+                 "country":  "Colombia",
+                 "webitel_host":  "https://aventus.us-east.webitel.com",
+                 "access_token":  "di3tdiznk3bbmgypxz9hjaj1er",
+                 "schema_id":  124,
+                 "schema_name":  "whatsapp-infobip-tuparcero-prod"
+             }
+}

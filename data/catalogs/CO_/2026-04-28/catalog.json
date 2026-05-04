@@ -1,0 +1,657 @@
+{
+  "catalog_version": "2026-04-28",
+  "project_index": "CO_",
+  "company": {
+    "display_name": "Credito365",
+    "legal_context": "Credito365 Colombia / Lendi cobranza",
+    "country": "CO",
+    "currency_index": "COP",
+    "schema_reference": "schemas/test/whatsapp-infobip-credito365-co-only-v2026.04.25.json",
+    "trusted_result_mapping_schema": "C:/Users/Ivan/Documents/WA bot/schemas/current/whatsapp-infobip-credito365-prod.json"
+  },
+  "wa_promt_gpt": {
+    "flow_variable": "wa_promt_gpt",
+    "source_file": "wa_promt_gpt.txt",
+    "encoding": "utf-8",
+    "note": "English instructions in catalog; client-facing replies in Colombian Spanish per prompt. Injected into Webitel set wa_promt_gpt; patch: schemas/tools/patch-co-wa-prompt-in-schema.mjs"
+  },
+  "openai_style_rules": {
+    "append_to_developer_message": [
+      "Always respond in Colombian Spanish (natural professional tone)",
+      "Keep responses concise, natural, ready to send",
+      "No markdown, no formatting, no links",
+      "Do not invent data",
+      "If critical info is missing -> offer transfer to human agent",
+      "return_final_status: use PROMISE_DATE_TODAY / PROMISE_DATE_TOMORROW from client_content (never swap); multilingual same-day: hoy, ahora, today, сегодня, hoje → PROMISE_DATE_TODAY only",
+      "return_final_status: use contact_result_promise_of_payment for a newly registered payment promise; use contact_result_ptp_follow_up only for follow-up without a new date/amount commitment in this turn"
+    ]
+  },
+  "crm": {
+    "client_lookup_by_phone": {
+      "description": "Credito365 CO: GET client-info по телефону. В ответе CRM свои ключи; в Webitel export variables пишут в единые имена для логики схемы.",
+      "unified_variable_contract": "Ниже flow_variable — канон для промптов, sendText, CRM submit; в других проектах те же flow_variable, другие crm_response_field.",
+      "primary_request": {
+        "id": "client_info_by_destination",
+        "method": "GET",
+        "url_template": "https://api.credito365.co/api/partner/webitel/client-info?phone=${destination}",
+        "timeout_ms": 5000,
+        "insecure_skip_verify": true,
+        "response_code_variable": "http_response_code",
+        "export_cookie_name": "my-cookie",
+        "use_cache": false,
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "PARTNER-API-KEY",
+            "value": "${PARTNER-API-KEY}"
+          }
+        ],
+        "request_data": null,
+        "parser": "application/json"
+      },
+      "alternate_request": {
+        "id": "client_info_by_user",
+        "note": "Тот же API, если номер в переменной user (например otra rama del flujo).",
+        "method": "GET",
+        "url_template": "https://api.credito365.co/api/partner/webitel/client-info?phone=${user}",
+        "timeout_ms": 5000,
+        "insecure_skip_verify": true,
+        "response_code_variable": "http_response_code",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "PARTNER-API-KEY",
+            "value": "$${PARTNER-API-KEY_coll}"
+          }
+        ]
+      },
+      "export_variables": [
+        {
+          "flow_variable": "collector_id",
+          "crm_response_field": "collector_id"
+        },
+        {
+          "flow_variable": "link",
+          "crm_response_field": "link"
+        },
+        {
+          "flow_variable": "client_id",
+          "crm_response_field": "client_id"
+        },
+        {
+          "flow_variable": "dpd",
+          "crm_response_field": "dpd"
+        },
+        {
+          "flow_variable": "amount",
+          "crm_response_field": "outstanding_amount"
+        },
+        {
+          "flow_variable": "ptp_date",
+          "crm_response_field": "ptp_date"
+        },
+        {
+          "flow_variable": "ptp_status",
+          "crm_response_field": "ptp_status"
+        },
+        {
+          "flow_variable": "ptp_amount",
+          "crm_response_field": "ptp_amount"
+        },
+        {
+          "flow_variable": "loan_id",
+          "crm_response_field": "loan_id"
+        },
+        {
+          "flow_variable": "discount_valid_to",
+          "crm_response_field": "discount_valid_until"
+        },
+        {
+          "flow_variable": "discounted_payment",
+          "crm_response_field": "discounted_payment_amount"
+        },
+        {
+          "flow_variable": "discount_type",
+          "crm_response_field": "discount_type"
+        },
+        {
+          "flow_variable": "extension_min_payment",
+          "crm_response_field": "extension_amount"
+        },
+        {
+          "flow_variable": "loan_type",
+          "crm_response_field": "loan_type"
+        },
+        {
+          "flow_variable": "client_full_name",
+          "crm_response_field": "client_name"
+        },
+        {
+          "flow_variable": "last_wa_template",
+          "crm_response_field": "last_wa_template"
+        },
+        {
+          "flow_variable": "short_link",
+          "crm_response_field": "short_link"
+        },
+        {
+          "flow_variable": "status",
+          "crm_response_field": "status"
+        }
+      ],
+      "aliases_in_schema": {
+        "discount_payment": "En algunos nodos legacy (p. ej. sendText descuento) puede usarse ${discount_payment}; alinear con discounted_payment tras export o set intermedio."
+      }
+    },
+    "result_submit": {
+      "description": "Credito365 CO: POST регистрации итога WA-бота в CRM (robot_phone_result_v2).",
+      "primary": {
+        "method": "POST",
+        "url": "https://api.credito365.co/api/partner/webitel/robot_phone_result_v2",
+        "timeout_ms": 5000,
+        "insecure_skip_verify": false,
+        "use_cache": false,
+        "response_code_variable": "CRM_response_code_result",
+        "export_cookie_name": "my-cookie",
+        "parser": "application/json",
+        "content_type": "application/json",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "PARTNER-API-KEY",
+            "value": "${PARTNER-API-KEY}"
+          }
+        ],
+        "request_data_lang": "json",
+        "body_json_template": "{\n  \"loan_id\": \"${loan_id}\",\n  \"collector_id\": \"${collector_id}\",\n  \"call_type\": \"${crm_call_type}\",\n  \"contact_type\": \"${contact_type}\",\n  \"direction\": \"direction_incoming\",\n  \"contact_result\": \"${contact_result}\",\n  \"comment\": \"${chat_log}\",\n  \"phone_number\": \"${destination}\",\n  \"promise_type\": \"${promise_type}\",\n  \"promise_date\": \"${promise_date}\",\n  \"promise_amount\": \"${promise_amount}\"\n}",
+        "body_field_map": [
+          {
+            "json_key": "loan_id",
+            "flow_variable": "loan_id"
+          },
+          {
+            "json_key": "collector_id",
+            "flow_variable": "collector_id"
+          },
+          {
+            "json_key": "call_type",
+            "flow_variable": "crm_call_type",
+            "note": "В JSON ключ call_type; значение из канала crm_call_type."
+          },
+          {
+            "json_key": "contact_type",
+            "flow_variable": "contact_type"
+          },
+          {
+            "json_key": "direction",
+            "flow_literal": "direction_incoming"
+          },
+          {
+            "json_key": "contact_result",
+            "flow_variable": "contact_result"
+          },
+          {
+            "json_key": "comment",
+            "flow_variable": "chat_log"
+          },
+          {
+            "json_key": "phone_number",
+            "flow_variable": "destination"
+          },
+          {
+            "json_key": "promise_type",
+            "flow_variable": "promise_type"
+          },
+          {
+            "json_key": "promise_date",
+            "flow_variable": "promise_date"
+          },
+          {
+            "json_key": "promise_amount",
+            "flow_variable": "promise_amount"
+          }
+        ],
+        "response_export_variables": [
+          {
+            "flow_variable": "crm_error",
+            "crm_response_field": "error"
+          },
+          {
+            "flow_variable": "crm_message",
+            "crm_response_field": "message"
+          }
+        ]
+      },
+      "crm_call_type_values": {
+        "type_inbound_wa_bot": "исходящий набор переменных перед основным циклом (process_name prod/test)",
+        "action_type_whatsapp": "ветка после ответа CRM / диагностика (set__8901f2d0d2535d12)"
+      }
+    }
+  },
+  "taxonomy": {
+    "contact_type": [
+      {
+        "id": "contact_type_client",
+        "label_es": "Cliente titular",
+        "crm_value": "contact_type_client"
+      },
+      {
+        "id": "third_party_contact",
+        "label_es": "Tercero (no titular)",
+        "crm_value": "third_party_contact"
+      }
+    ],
+    "crm_call_type": [
+      {
+        "id": "type_inbound_wa_bot",
+        "label": "WA bot inbound (prod path)"
+      },
+      {
+        "id": "action_type_whatsapp",
+        "label": "WA acción / post-registro"
+      }
+    ],
+    "contact_result": [
+      {
+        "id": "other",
+        "label_es": "Otro",
+        "children": {}
+      },
+      {
+        "id": "contact_result_provided_client_contact_info",
+        "label_es": "Proporcionó datos de contacto",
+        "children": {}
+      },
+      {
+        "id": "contact_result_refusal_to_transfer_information",
+        "label_es": "Rechazo a transferir información",
+        "children": {}
+      },
+      {
+        "id": "contact_result_promise_of_payment",
+        "label_es": "Promesa de pago",
+        "children": {
+          "promise_type": [
+            {
+              "id": "promise_type_full_payment",
+              "label_es": "Pago total"
+            },
+            {
+              "id": "promise_type_partial_payment",
+              "label_es": "Pago parcial"
+            },
+            {
+              "id": "promise_type_discount",
+              "label_es": "Pago con descuento"
+            },
+            {
+              "id": "promise_type_extension",
+              "label_es": "Extensión / prórroga"
+            },
+            {
+              "id": "no_promise",
+              "label_es": "Sin promesa (seguimiento)"
+            },
+            {
+              "id": "default",
+              "label_es": "Default"
+            }
+          ]
+        }
+      },
+      {
+        "id": "contact_result_already_payed",
+        "label_es": "Ya pagó (declarado)",
+        "children": {}
+      },
+      {
+        "id": "contact_result_ptp_follow_up",
+        "label_es": "Seguimiento PTP",
+        "children": {}
+      },
+      {
+        "id": "contact_result_refusal_to_pay",
+        "label_es": "Negativa a pagar",
+        "children": {}
+      },
+      {
+        "id": "customer_with_current_agreement",
+        "label_es": "Cliente con acuerdo vigente",
+        "children": {}
+      },
+      {
+        "id": "contact_result_paid_after_wa",
+        "label_es": "Pago después del WA",
+        "children": {}
+      }
+    ]
+  },
+  "result_mapping": {
+    "trusted_build": {
+      "schema_file": "C:/Users/Ivan/Documents/WA bot/schemas/current/whatsapp-infobip-credito365-prod.json",
+      "note": "Кейсы switch и теги узлов взяты из этого JSON; при новом билде обнови trusted-sources.json и запусти этот скрипт."
+    },
+    "tab": "result_mapping",
+    "pattern": "Эталон CO: на странице result mapping ветки switch по ${contact_result} и ${promise_type} совпадают с литералами CRM 1:1. contact_type выставляется Set после switch по ${contact_client} во встроенном модуле.",
+    "pages": {
+      "result_mapping": {
+        "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+        "embedded_module_page_id": "b7d79a8c-06dc-438f-b6c0-4817b6e15ef8",
+        "module_id": "b7d79a8c-06dc-438f-b6c0-4817b6e15ef8"
+      }
+    },
+    "contact_client_to_contact_type": {
+      "page_id": "b7d79a8c-06dc-438f-b6c0-4817b6e15ef8",
+      "switch": {
+        "tag": "switch__187a07d175bbf65b",
+        "id": "187a07d175bbf65b",
+        "variable": "${contact_client}",
+        "cases": [
+          "contact_type_client",
+          "third_party_contact",
+          "default"
+        ]
+      },
+      "mappings": [
+        {
+          "switch_branch": "contact_type_client",
+          "set_variable": "contact_type",
+          "crm_value": "contact_type_client",
+          "set_node_tag": "set__1b9d044b8d2fe5a9"
+        },
+        {
+          "switch_branch": "third_party_contact",
+          "set_variable": "contact_type",
+          "crm_value": "third_party_contact",
+          "set_node_tag": "set__a0ed20df9df6cd51"
+        },
+        {
+          "switch_branch": "default",
+          "note": "как в схеме Webitel"
+        }
+      ]
+    },
+    "contact_result": {
+      "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+      "switch": {
+        "tag": "switch__d5c8697614086dbb",
+        "id": "d5c8697614086dbb",
+        "variable": "${contact_result}",
+        "cases": [
+          "other",
+          "contact_result_provided_client_contact_info",
+          "contact_result_refusal_to_transfer_information",
+          "contact_result_promise_of_payment",
+          "contact_result_already_payed",
+          "contact_result_ptp_follow_up",
+          "contact_result_refusal_to_pay",
+          "customer_with_current_agreement",
+          "contact_result_paid_after_wa"
+        ]
+      },
+      "branch_equals_crm_value": true,
+      "mappings": [
+        {
+          "switch_branch": "other",
+          "set_variable": "contact_result",
+          "crm_value": "other"
+        },
+        {
+          "switch_branch": "contact_result_provided_client_contact_info",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_provided_client_contact_info"
+        },
+        {
+          "switch_branch": "contact_result_refusal_to_transfer_information",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_refusal_to_transfer_information"
+        },
+        {
+          "switch_branch": "contact_result_promise_of_payment",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_promise_of_payment"
+        },
+        {
+          "switch_branch": "contact_result_already_payed",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_already_payed"
+        },
+        {
+          "switch_branch": "contact_result_ptp_follow_up",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_ptp_follow_up"
+        },
+        {
+          "switch_branch": "contact_result_refusal_to_pay",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_refusal_to_pay"
+        },
+        {
+          "switch_branch": "customer_with_current_agreement",
+          "set_variable": "contact_result",
+          "crm_value": "customer_with_current_agreement"
+        },
+        {
+          "switch_branch": "contact_result_paid_after_wa",
+          "set_variable": "contact_result",
+          "crm_value": "contact_result_paid_after_wa"
+        }
+      ]
+    },
+    "promise_type": {
+      "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+      "switch": {
+        "tag": "switch__2f78cede30a33481",
+        "id": "2f78cede30a33481",
+        "variable": "${promise_type}",
+        "cases": [
+          "promise_type_full_payment",
+          "promise_type_partial_payment",
+          "promise_type_discount",
+          "promise_type_extension",
+          "no_promise",
+          "default"
+        ]
+      },
+      "branch_equals_crm_value": true,
+      "mappings": [
+        {
+          "switch_branch": "promise_type_full_payment",
+          "set_variable": "promise_type",
+          "crm_value": "promise_type_full_payment"
+        },
+        {
+          "switch_branch": "promise_type_partial_payment",
+          "set_variable": "promise_type",
+          "crm_value": "promise_type_partial_payment"
+        },
+        {
+          "switch_branch": "promise_type_discount",
+          "set_variable": "promise_type",
+          "crm_value": "promise_type_discount"
+        },
+        {
+          "switch_branch": "promise_type_extension",
+          "set_variable": "promise_type",
+          "crm_value": "promise_type_extension"
+        },
+        {
+          "switch_branch": "no_promise",
+          "set_variable": "promise_type",
+          "crm_value": "no_promise"
+        },
+        {
+          "switch_branch": "default",
+          "set_variable": "promise_type",
+          "crm_value": "default"
+        }
+      ]
+    },
+    "crm_response_switch": {
+      "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+      "switch": {
+        "tag": "switch__13722452c8514090",
+        "id": "13722452c8514090",
+        "variable": "${CRM_response_code_result}",
+        "cases": [
+          "200",
+          "default"
+        ]
+      },
+      "note": "После POST в CRM — маршрутизация по коду ответа."
+    },
+    "submodule_reference_switches": {
+      "page_id": "b7d79a8c-06dc-438f-b6c0-4817b6e15ef8",
+      "contact_result_switch": {
+        "tag": "switch__f98c9f4e57d2f4fb",
+        "id": "f98c9f4e57d2f4fb",
+        "variable": "${contact_result}",
+        "cases": [
+          "default",
+          "contact_result_promise_of_payment",
+          "contact_result_refusal_to_pay",
+          "contact_result_already_payed",
+          "contact_result_ptp_follow_up",
+          "customer_with_current_agreement",
+          "contact_result_paid_after_wa",
+          "contact_result_provided_client_contact_info",
+          "other",
+          "contact_result_refusal_to_transfer_information"
+        ]
+      },
+      "promise_type_switch": {
+        "tag": "switch__dbd8306b1041d4a5",
+        "id": "dbd8306b1041d4a5",
+        "variable": "${promise_type}",
+        "cases": [
+          "default",
+          "promise_type_full_payment",
+          "promise_type_partial_payment",
+          "promise_type_discount",
+          "promise_type_extension"
+        ]
+      },
+      "note": "В подмодуле те же литералы CRM; порядок case в UI другой — не добавлять отдельные «синонимы», если строки совпадают с result page."
+    },
+    "sync_policy": {
+      "steps": [
+        "Обновить путь в trusted-sources.json при новом эталонном билде.",
+        "Запустить: node tools/sync-co-result-mapping-from-schema.mjs",
+        "Проверить: node tools/catalog-checklist.mjs CO_"
+      ]
+    }
+  },
+  "final_messages": {
+    "page_id": "1e5656f5-9b99-4a29-8296-8de4e001ea82",
+    "description": "sendText tras resultado final / registro CRM (texto al cliente)",
+    "contact_results_sin_sendtext_en_export": [
+      "other",
+      "contact_result_already_payed",
+      "contact_result_ptp_follow_up",
+      "promise_type no_promise",
+      "promise_type default"
+    ],
+    "by_contact_result": {
+      "contact_result_refusal_to_pay": {
+        "text": "${client_full_name}, lamentamos mucho no haber podido resolver el problema del pago de forma voluntaria.\nContinuaremos con las gestiones de cobro hasta que usted cumpla con sus obligaciones.\nHemos registrado información sobre su negativa a pagar.",
+        "schema_tag": "sendText__b573bb6cc3413ebe"
+      },
+      "contact_result_paid_after_wa": {
+        "text": "${client_full_name}, gracias por tu pago. Aún no hemos recibido tu información de pago.\n\nVerificaremos esta información y nos pondremos en contacto contigo si es necesario. ¡Que tengas un buen día!",
+        "schema_tag": "sendText__6c2068babfffc887"
+      },
+      "contact_result_promise_of_payment": {
+        "by_promise_type": {
+          "promise_type_full_payment": {
+            "variants": [
+              {
+                "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount} antes del ${promise_date}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nPodrá solicitar un nuevo préstamo inmediatamente después de realizar el pago. ¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+                "schema_tag": "sendText__713b0ad44bce2ce3"
+              },
+              {
+                "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount} $ ${currency_index} antes del ${promise_date}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nPodrá solicitar un nuevo préstamo inmediatamente después de realizar el pago. ¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+                "schema_tag": "sendText__cd6dc01c5e23dd74"
+              }
+            ],
+            "note": "Dos nodos con texto casi igual; unificar en siguiente versión de flujo."
+          },
+          "promise_type_partial_payment": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${amount}  $ ${currency_index} antes del ${promise_dt}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\nUn pago parcial no cubre la totalidad del préstamo. Por favor, realice los pagos a tiempo.\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+            "schema_tag": "sendText__dca9483c51490a46"
+          },
+          "promise_type_discount": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${discount_payment} $ ${currency_index}del ${promise_dt}.\n\nPuede consultar la información de su préstamo en su cuenta personal en ${short_link}.\n\n¡Los pagos puntuales mejoran su historial crediticio!\n\nTenga en cuenta las consecuencias negativas de los pagos atrasados.",
+            "schema_tag": "sendText__604d4d1b4a90f082"
+          },
+          "promise_type_extension": {
+            "text": "${client_full_name}, gracias! Esperamos recibir su pago de ${extension_min_payment}  $ ${currency_index} antes del ${promise_dt}.\n\nPuede consultar la información del préstamo en su cuenta personal en ${short_link}.\n\nAl extender el plazo del préstamo, ¡extiende el tiempo durante el cual puede usar los fondos prestados!\nTenga en cuenta las consecuencias negativas del impago.",
+            "schema_tag": "sendText__02bba3a32e75ca07"
+          }
+        }
+      },
+      "customer_with_current_agreement": {
+        "text": "¡Estamos encantados de ayudarte en cualquier momento!\n\n¡Gracias por elegir Lendi y que tengas un buen día! ",
+        "schema_tag": "sendText__41cc61e5ba2c07a3",
+        "note": "Menciona Lendi; revisar copy para Credito365."
+      },
+      "contact_result_provided_client_contact_info": {
+        "text": "${client_full_name}, gracias por la información!\n\n¡Gracias por usar nuestros servicios! ¡Adiós!",
+        "schema_tag": "sendText__c4a269414c970ace"
+      },
+      "contact_result_refusal_to_transfer_information": {
+        "text": "¡Gracias! Disculpe las molestias, ¡que tenga un buen día!",
+        "schema_tag": "sendText__b4e79588dc4e9364"
+      },
+      "generic_error": {
+        "text": "¡Disculpe, hubo un error! ¡Disculpe las molestias, que tenga un buen día!",
+        "schema_tag": "sendText__4376d52b7361fdab"
+      }
+    }
+  },
+  "testers": {
+    "description": "Números de prueba; variable test_owner en flujo",
+    "people": [
+      {
+        "display_name": "Jose David Naranjo Bedoya",
+        "company": "Credito365",
+        "phone_e164": "+573146365003",
+        "phone_digits": "573146365003",
+        "test_owner_key": "Jose David Naranjo Bedoya"
+      },
+      {
+        "display_name": "Pablo Andrés Gonzales Balbutin",
+        "company": "Credito365",
+        "phone_e164": "+573122562287",
+        "phone_digits": "573122562287",
+        "test_owner_key": "Pablo Andrés Gonzales Balbutin"
+      },
+      {
+        "display_name": "Ivan Zyrianov",
+        "company": "Credito365",
+        "phone_e164": "+79100096386",
+        "phone_digits": "79100096386",
+        "test_owner_key": "Ivan Zyrianov"
+      },
+      {
+        "display_name": "Juan Fernando Vargas Garces",
+        "company": "Credito365",
+        "phone_e164": "+57159753",
+        "phone_digits": "159753",
+        "test_owner_key": "Juan Fernando Vargas Garces"
+      }
+    ]
+  },
+  "process_names": {
+    "test": "WA_bot_CO_results_test",
+    "prod": "WA_bot_CO_results_prod"
+  }
+}

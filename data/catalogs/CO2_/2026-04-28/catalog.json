@@ -1,0 +1,57 @@
+{
+  "catalog_version": "2026-04-28",
+  "project_index": "CO2_",
+  "_catalog_status": "stub",
+  "company": { "display_name": "TuParcero", "country": "CO" },
+  "wa_promt_gpt": {
+    "flow_variable": "wa_promt_gpt",
+    "source_file": "wa_promt_gpt.txt",
+    "encoding": "utf-8"
+  },
+  "openai_style_rules": { "append_to_developer_message": [] },
+  "crm": {
+    "client_lookup_by_phone": { "requests": [] },
+    "result_submit": { "primary": {} }
+  },
+  "taxonomy": {
+    "contact_type": [],
+    "crm_call_type": [],
+    "contact_result": []
+  },
+  "result_mapping": {
+    "tab": "result_mapping",
+    "description": "Stub: al definir schema TuParcero, tabla switch_branch → set_variable → crm_value por compañía CO2_.",
+    "pattern": "switch → set variable → crm_value",
+    "contact_type": [],
+    "contact_result": [],
+    "promise_type": []
+  },
+  "final_messages": { "by_contact_result": {} },
+  "testers": {
+    "description": "Números de prueba; variable test_owner en flujo",
+    "people": [
+      {
+        "display_name": "Jose David Naranjo Bedoya",
+        "company": "Credito365",
+        "phone_e164": "+573146365003",
+        "phone_digits": "573146365003",
+        "test_owner_key": "Jose David Naranjo Bedoya"
+      },
+      {
+        "display_name": "Pablo Andrés Gonzales Balbutin",
+        "company": "Credito365",
+        "phone_e164": "+573122562287",
+        "phone_digits": "573122562287",
+        "test_owner_key": "Pablo Andrés Gonzales Balbutin"
+      },
+      {
+        "display_name": "Ivan Zyrianov",
+        "company": "TuParcero",
+        "phone_e164": "+79100096386",
+        "phone_digits": "79100096386",
+        "test_owner_key": "Ivan Zyrianov"
+      }
+    ]
+  },
+  "process_names": { "test": "", "prod": "" }
+}

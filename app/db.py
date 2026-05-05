@@ -1,8 +1,12 @@
-"""CRM DB connectivity helpers.
+"""CRM DB connectivity helpers — supports MySQL (CO/CO2) and PostgreSQL
+(AR/PE) per company.
 
-The CRM DB lives on `localhost` for every project; only the port differs per
-company (`crm_db_port` in `companies.json`). User `viewer`, engine `mysql`.
-Password (and host/user override, if needed) is read from `data/db.json`.
+Per-company settings live in `data/companies.json`:
+  * `crm_db_engine`   — "mysql" | "postgres"  (default: mysql for legacy)
+  * `crm_db_port`     — local port (SSH tunnel target)
+  * `crm_db_name`     — Postgres database name (required for engine=postgres)
+
+Common credentials live in `data/db.json` (host=localhost, user=viewer, password).
 """
 from __future__ import annotations
 
@@ -39,38 +43,97 @@ def load_db_config() -> dict:
     return merged
 
 
-def test_connection(port: int) -> Optional[str]:
-    """Try a SELECT 1 against the CRM DB. Returns None on success, error
-    message on failure."""
-    try:
-        import pymysql
-    except ImportError:
-        return (
-            "Драйвер pymysql не установлен. Выполни "
-            "`pip install pymysql` и пересобери exe."
-        )
+def _connect_mysql(host: str, port: int, user: str, password: str, timeout: int):
+    import pymysql
 
+    return pymysql.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=password or "",
+        connect_timeout=timeout,
+    )
+
+
+def _connect_postgres(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    database: str,
+    timeout: int,
+):
+    import pg8000.dbapi
+
+    return pg8000.dbapi.connect(
+        host=host,
+        port=port,
+        user=user,
+        password=(password or None),
+        database=database or "template1",
+        timeout=timeout,
+        ssl_context=None,
+    )
+
+
+def connect(
+    engine: str,
+    port: int,
+    *,
+    database: Optional[str] = None,
+):
+    """Open a connection using shared creds from db.json + per-call engine/port.
+    Caller is responsible for closing it."""
     cfg = load_db_config()
+    host = cfg.get("host", "localhost")
+    user = cfg.get("user", "viewer")
+    password = cfg.get("password", "") or ""
+    timeout = int(cfg.get("connect_timeout", 5) or 5)
+    eng = (engine or "mysql").lower()
+    if eng == "postgres":
+        return _connect_postgres(host, port, user, password, database or "", timeout)
+    return _connect_mysql(host, port, user, password, timeout)
+
+
+def test_connection(
+    port: int,
+    engine: str = "mysql",
+    database: Optional[str] = None,
+) -> Optional[str]:
+    """Try a simple `SELECT 1` against the CRM DB. Returns None on success,
+    a short error string on failure. Picks driver by `engine`."""
+    eng = (engine or "mysql").lower()
+    if eng == "postgres":
+        try:
+            import pg8000.dbapi  # noqa: F401
+        except ImportError:
+            return "Драйвер pg8000 не установлен."
+    else:
+        try:
+            import pymysql  # noqa: F401
+        except ImportError:
+            return "Драйвер pymysql не установлен."
+
     try:
-        conn = pymysql.connect(
-            host=cfg.get("host", "localhost"),
-            port=int(port),
-            user=cfg.get("user", "viewer"),
-            password=cfg.get("password", "") or "",
-            connect_timeout=int(cfg.get("connect_timeout", 5) or 5),
-        )
+        conn = connect(eng, int(port), database=database)
     except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
+        return f"{type(exc).__name__}: {str(exc)[:200]}"
     try:
-        with conn.cursor() as cur:
+        cur = conn.cursor()
+        try:
             cur.execute("SELECT 1")
             cur.fetchone()
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
     except Exception as exc:
         try:
             conn.close()
         except Exception:
             pass
-        return f"{type(exc).__name__}: {exc}"
+        return f"{type(exc).__name__}: {str(exc)[:200]}"
     try:
         conn.close()
     except Exception:

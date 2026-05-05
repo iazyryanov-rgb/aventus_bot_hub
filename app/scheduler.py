@@ -83,6 +83,96 @@ def _before_daily_start(tz_name: str, start_time: str) -> bool:
     return now < today_start
 
 
+UNANSWERED_THRESHOLD_MIN = 15
+UNANSWERED_LOOKBACK_HOURS = 24
+
+
+def _build_agents_chats_unanswered_text(company: Company) -> Optional[str]:
+    try:
+        client = WebitelClient(company.webitel_host, company.webitel_access_token)
+    except Exception:
+        return None
+    now_ms = int(time.time() * 1000)
+    cutoff_ms = now_ms - UNANSWERED_THRESHOLD_MIN * 60 * 1000
+    since_ms = now_ms - UNANSWERED_LOOKBACK_HOURS * 3600 * 1000
+
+    dialogs: list[dict] = []
+    try:
+        for page in range(1, 10):
+            data = client._get(
+                f"/chat/dialogs?size=500&page={page}"
+                f"&date.since={since_ms}&date.until={now_ms}"
+            )
+            items = data.get("data") or []
+            dialogs.extend(items)
+            if not data.get("next") or not items:
+                break
+    except WebitelError:
+        return None
+
+    pending: list[tuple[dict, int]] = []
+    for d in dialogs:
+        msg = d.get("message") or {}
+        sender = (msg.get("sender") or {}).get("id")
+        if not sender:
+            continue
+        if str(sender) == str(d.get("id")):
+            continue  # last message from bot/agent — answered
+        try:
+            last_ms = int(msg.get("date") or 0)
+        except (TypeError, ValueError):
+            last_ms = 0
+        if not last_ms or last_ms > cutoff_ms:
+            continue  # not aged 15 min yet
+        pending.append((d, last_ms))
+
+    if not pending:
+        return None
+
+    def _members(d_id: str) -> list:
+        try:
+            return client.list_dialog_members(d_id)
+        except WebitelError:
+            return []
+
+    by_agent: dict[str, list[int]] = {}
+    no_agent_ages: list[int] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        members_list = list(pool.map(lambda p: _members(p[0]["id"]), pending))
+    for (d, last_ms), members in zip(pending, members_list):
+        agent_name: Optional[str] = None
+        for m in members:
+            if m.type == "user" and m.name:
+                agent_name = m.name
+                break
+        age_min = max(1, int((now_ms - last_ms) / 60000))
+        if agent_name:
+            by_agent.setdefault(agent_name, []).append(age_min)
+        else:
+            no_agent_ages.append(age_min)
+
+    if not by_agent and not no_agent_ages:
+        return None
+
+    lines: list[str] = []
+    for agent, ages in sorted(
+        by_agent.items(), key=lambda kv: (-len(kv[1]), -max(kv[1]))
+    ):
+        lines.append(f"• {agent} — {len(ages)} chat(s), max {max(ages)}m")
+    if no_agent_ages:
+        lines.append(
+            f"• (bot/no-agent) — {len(no_agent_ages)} chat(s), max {max(no_agent_ages)}m"
+        )
+
+    return (
+        f"⚠️ #{company.name} | #Agents\n"
+        f"🕒 Chats unanswered > {UNANSWERED_THRESHOLD_MIN}min\n"
+        f"\n"
+        + "\n".join(lines)
+        + f"\n\n🌐 {company.webitel_host.rstrip('/')}"
+    )
+
+
 def _build_agents_on_break_text(company: Company) -> Optional[str]:
     try:
         client = WebitelClient(company.webitel_host, company.webitel_access_token)
@@ -140,28 +230,49 @@ def _build_queue_checklist_text(company: Company) -> Optional[str]:
         queues: list[Queue] = client.list_queues(types=list(AGENT_QUEUE_TYPES))
     except WebitelError:
         return None
+    try:
+        chat_queues: list[Queue] = client.list_queues(types=[6])
+    except WebitelError:
+        chat_queues = []
+
+    def _has_voice(g: str, s: str) -> bool:
+        for q in queues:
+            if not q.enabled:
+                continue
+            name = q.name or ""
+            if not name.lstrip().lower().startswith("collection"):
+                continue
+            if _has_token(name, g) and _has_token(name, s):
+                return True
+        return False
+
+    def _has_chat(g: str) -> bool:
+        for q in chat_queues:
+            if not q.enabled:
+                continue
+            name = q.name or ""
+            if "collection" not in name.lower():
+                continue
+            if _has_token(name, g):
+                return True
+        return False
+
     missing: list[tuple[str, str]] = []
     ok = 0
     for g in COLLECTION_GROUPS:
         for s in COLLECTION_SUBS:
-            found = False
-            for q in queues:
-                if not q.enabled:
-                    continue
-                name = q.name or ""
-                if not name.lstrip().lower().startswith("collection"):
-                    continue
-                if not _has_token(name, g) or not _has_token(name, s):
-                    continue
-                found = True
-                break
-            if found:
+            if _has_voice(g, s):
                 ok += 1
             else:
                 missing.append((g, s))
+        if _has_chat(g):
+            ok += 1
+        else:
+            missing.append((g, "Chat"))
+
     if not missing:
         return None
-    total = len(COLLECTION_GROUPS) * len(COLLECTION_SUBS)
+    total = len(COLLECTION_GROUPS) * (len(COLLECTION_SUBS) + 1)
     missing_lines = "\n".join(f"• {g} — {s}" for g, s in missing)
     return (
         f"⚠️ #{company.name} | #Agents\n"
@@ -179,6 +290,7 @@ def _build_queue_checklist_text(company: Company) -> Optional[str]:
 TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "queue_checklist": _build_queue_checklist_text,
     "agents_on_break": _build_agents_on_break_text,
+    "agents_chats_unanswered": _build_agents_chats_unanswered_text,
 }
 
 

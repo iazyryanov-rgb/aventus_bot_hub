@@ -14,3 +14,7 @@ def data_dir() -> Path:
 
 def icon_path() -> Path:
     return app_dir() / "app-icon.png"
+
+
+def ico_path() -> Path:
+    return app_dir() / "app-icon.ico"

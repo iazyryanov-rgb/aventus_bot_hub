@@ -13,6 +13,7 @@ from ..data import (
     now_in_timezone,
     save_bot,
 )
+from ..i18n import t
 from ..webitel import WebitelClient, WebitelError, find_whatsapp_infobip_prod
 
 BG = "#ffffff"
@@ -145,10 +146,12 @@ class Row(tk.Frame):
         indent: int = 0,
         on_menu: Optional[Callable[[tk.Event], None]] = None,
         on_click: Optional[Callable[[], None]] = None,
+        on_check: Optional[Callable[[bool], None]] = None,
     ) -> None:
         super().__init__(master, bg=BG, highlightthickness=0)
         self._on_menu = on_menu
         self._on_click = on_click
+        self._on_check = on_check
         self._bg_widgets: list[tk.Widget] = [self]
 
         if indent:
@@ -156,7 +159,9 @@ class Row(tk.Frame):
             spacer.pack(side="left")
             self._bg_widgets.append(spacer)
 
-        self.checkbox = Checkbox(self, checked=False)
+        self.checkbox = Checkbox(
+            self, checked=False, command=self._on_checkbox_change
+        )
         self.checkbox.pack(side="left", padx=(10, 10), pady=5)
 
         self._status: Optional[StatusIcon] = None
@@ -183,6 +188,10 @@ class Row(tk.Frame):
 
     def set_label(self, text: str) -> None:
         self.label.configure(text=text)
+
+    def _on_checkbox_change(self, value: bool) -> None:
+        if self._on_check:
+            self._on_check(value)
 
     def set_status(self, state: Optional[str]) -> None:
         if state is None:
@@ -243,13 +252,11 @@ class CompaniesTree(ttk.Frame):
         head.pack(fill="x", padx=14, pady=(14, 10))
         tk.Label(
             head,
-            text="КОМПАНИИ И БОТЫ",
+            text=t("header_companies"),
             font=("Segoe UI", 9, "bold"),
             fg=HEADER,
             bg=BG,
         ).pack(side="left")
-        self._sync_btn = ttk.Button(head, text="Sync с Webitel", command=self._sync_webitel)
-        self._sync_btn.pack(side="right")
 
         self._list = tk.Frame(self, bg=BG)
         self._list.pack(fill="both", expand=True, padx=6, pady=(0, 12))
@@ -259,6 +266,25 @@ class CompaniesTree(ttk.Frame):
         self._bot_rows: dict[tuple[str, str], Row] = {}
         self._bot_errors: dict[tuple[str, str], bool] = {}
         self._populate()
+
+        actions = ttk.Frame(self)
+        actions.pack(fill="x", padx=8, pady=(0, 12))
+        self._add_btn = ttk.Button(
+            actions, text=t("btn_add_company"), command=self._open_add_company
+        )
+        self._add_btn.pack(side="left", padx=(6, 8))
+        self._analytics_btn = ttk.Button(
+            actions,
+            text=t("btn_analytics"),
+            command=self._open_analytics,
+            state="disabled",
+        )
+        self._analytics_btn.pack(side="left")
+        self._sync_btn = ttk.Button(
+            actions, text=t("btn_sync_webitel"), command=self._sync_webitel
+        )
+        self._sync_btn.pack(side="left", padx=(8, 0))
+
         self._tick()
 
     def _co_label(self, c: Company) -> str:
@@ -283,6 +309,8 @@ class CompaniesTree(ttk.Frame):
                 self._list,
                 label=self._co_label(c),
                 on_menu=lambda e, key=c.key: self._show_company_menu(e, key),
+                on_click=lambda key=c.key: self._open_dashboard(key),
+                on_check=lambda _v: self._refresh_analytics(),
             )
             co_row.pack(fill="x")
             co_row.set_status("warn" if not is_company_complete(c.key) else None)
@@ -296,10 +324,20 @@ class CompaniesTree(ttk.Frame):
                     indent=28,
                     on_menu=lambda e, key=c.key, k=kind: self._show_bot_menu(e, key, k),
                     on_click=on_click,
+                    on_check=lambda _v: self._refresh_analytics(),
                 )
                 bot_row.pack(fill="x")
                 self._bot_rows[(c.key, kind)] = bot_row
                 self._refresh_bot_status(c.key, kind)
+
+    def _reload_companies(self) -> None:
+        for w in list(self._list.winfo_children()):
+            w.destroy()
+        self._co_rows.clear()
+        self._bot_rows.clear()
+        self._companies = load_companies()
+        self._populate()
+        self._refresh_analytics()
 
     def _tick(self) -> None:
         for c in self._companies:
@@ -329,6 +367,65 @@ class CompaniesTree(ttk.Frame):
             menu.tk_popup(event.x_root, event.y_root)
         finally:
             menu.grab_release()
+
+    def _open_dashboard(self, company_key: str) -> None:
+        company = next((c for c in self._companies if c.key == company_key), None)
+        if not company or not self._on_open_panel:
+            return
+        from .dashboard_panel import DashboardPanel
+        self._on_open_panel(lambda parent: DashboardPanel(parent, company))
+
+    def _open_add_company(self) -> None:
+        from .company_edit_dialog import CompanyEditDialog
+        CompanyEditDialog(
+            self, company_key=None, on_saved=lambda _k: self._reload_companies()
+        )
+
+    def _collect_selection(self) -> tuple[list[str], list[tuple[str, str]]]:
+        companies_checked: list[str] = []
+        bots_checked: list[tuple[str, str]] = []
+        for c in self._companies:
+            row = self._co_rows.get(c.key)
+            if row and row.is_checked():
+                companies_checked.append(c.key)
+            for kind in ("voice", "whatsapp", "agents"):
+                br = self._bot_rows.get((c.key, kind))
+                if br and br.is_checked():
+                    bots_checked.append((c.key, kind))
+        return companies_checked, bots_checked
+
+    def _analytics_eligible(
+        self, companies: list[str], bots: list[tuple[str, str]]
+    ) -> bool:
+        if companies and bots:
+            return False
+        if companies and not bots:
+            return len(companies) >= 1
+        if bots and not companies:
+            kinds = {kind for _, kind in bots}
+            return len(kinds) == 1
+        return False
+
+    def _refresh_analytics(self) -> None:
+        companies, bots = self._collect_selection()
+        state = "normal" if self._analytics_eligible(companies, bots) else "disabled"
+        self._analytics_btn.configure(state=state)
+
+    def _open_analytics(self) -> None:
+        if not self._on_open_panel:
+            return
+        companies, bots = self._collect_selection()
+        if not self._analytics_eligible(companies, bots):
+            return
+        if companies and not bots:
+            keys = companies
+            kind: Optional[str] = None
+        else:
+            keys = sorted({k for k, _ in bots})
+            kind = next(iter({k for _, k in bots}))
+        objs = [c for c in self._companies if c.key in keys]
+        from .analytics_panel import AnalyticsPanel
+        self._on_open_panel(lambda parent: AnalyticsPanel(parent, objs, kind))
 
     def _open_bot_panel(self, company_key: str, kind: str) -> None:
         company = next((c for c in self._companies if c.key == company_key), None)
@@ -364,7 +461,7 @@ class CompaniesTree(ttk.Frame):
         self._refresh_bot_status(company_key, kind)
 
     def _sync_webitel(self) -> None:
-        self._sync_btn.configure(state="disabled", text="Синхронизация…")
+        self._sync_btn.configure(state="disabled", text="…")
         companies = list(self._companies)
         threading.Thread(
             target=self._sync_worker, args=(companies,), daemon=True
@@ -401,7 +498,7 @@ class CompaniesTree(ttk.Frame):
         for key, status, _info in results:
             self._bot_errors[(key, "whatsapp")] = status == "error"
             self._refresh_bot_status(key, "whatsapp")
-        self._sync_btn.configure(state="normal", text="Sync с Webitel")
+        self._sync_btn.configure(state="normal", text=t("btn_sync_webitel"))
         ok = sum(1 for _, s, _ in results if s == "ok")
         problems = [
             f"  {k} — {s}: {info}"

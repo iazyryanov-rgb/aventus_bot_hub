@@ -8,6 +8,7 @@ from typing import Optional
 
 from ..alerts import TelegramError, load_alerts_config, send_telegram_message
 from ..data import Company
+from ..i18n import t
 from ..webitel import QUEUE_TYPE_NAMES, Queue, WebitelClient, WebitelError
 
 AGENT_QUEUE_TYPES = (0, 1, 4, 5, 10)
@@ -85,6 +86,7 @@ class QueuesPanel(ttk.Frame):
         self._row_to_queue: dict[str, Queue] = {}
         self._all_queues: list[Queue] = []
 
+        self._f_sector = tk.StringVar(value="Collection")
         self._f_enabled = tk.StringVar(value="Все")
         self._f_coll = tk.StringVar(value="Все")
         self._f_group = tk.StringVar(value="Все")
@@ -92,7 +94,7 @@ class QueuesPanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="КОНТРОЛЬ ОЧЕРЕДЕЙ",
+            text=t("header_queues"),
             font=("Segoe UI", 9, "bold"),
             foreground="#6b7280",
         ).pack(anchor="w", padx=14, pady=(14, 6))
@@ -118,23 +120,24 @@ class QueuesPanel(ttk.Frame):
         )
         cl.pack(fill="x", padx=14, pady=(0, 8))
         self._cl_groups = ("G1", "G2", "G3")
-        self._cl_types = ("Main", "APTP", "BPTP")
+        self._cl_types = ("Main", "APTP", "BPTP", "Chat")
         self._cl_cells: dict[tuple[str, str], ttk.Label] = {}
+        self._all_chat_queues: list[Queue] = []
         ttk.Label(cl, text="").grid(row=0, column=0, padx=12, pady=2)
-        for j, t in enumerate(self._cl_types, start=1):
-            ttk.Label(cl, text=t, font=("Segoe UI", 9, "bold")).grid(
+        for j, tp in enumerate(self._cl_types, start=1):
+            ttk.Label(cl, text=tp, font=("Segoe UI", 9, "bold")).grid(
                 row=0, column=j, padx=12, pady=2
             )
         for i, g in enumerate(self._cl_groups, start=1):
             ttk.Label(cl, text=g, font=("Segoe UI", 9, "bold")).grid(
                 row=i, column=0, padx=12, pady=2, sticky="w"
             )
-            for j, t in enumerate(self._cl_types, start=1):
+            for j, tp in enumerate(self._cl_types, start=1):
                 lbl = ttk.Label(
                     cl, text="—", foreground="#9ca3af", font=("Segoe UI", 10)
                 )
                 lbl.grid(row=i, column=j, padx=12, pady=2)
-                self._cl_cells[(g, t)] = lbl
+                self._cl_cells[(g, tp)] = lbl
         self._cl_summary = ttk.Label(cl, text="", foreground="#6b7280")
         self._cl_summary.grid(
             row=len(self._cl_groups) + 1,
@@ -176,12 +179,19 @@ class QueuesPanel(ttk.Frame):
             )
             cb.pack(side="left", padx=(4, 14))
 
+        add_filter("Сектор:", self._f_sector, ["Все", "Collection", "КЦ"], 12)
         add_filter("Статус:", self._f_enabled, ["Все", "Включенные"], 14)
         add_filter("Префикс:", self._f_coll, ["Все", "Только Collection"], 18)
         add_filter("Группа:", self._f_group, ["Все", "G1", "G2", "G3"], 8)
         add_filter("Тип:", self._f_sub, ["Все", "Main", "APTP", "BPTP"], 10)
 
-        for var in (self._f_enabled, self._f_coll, self._f_group, self._f_sub):
+        for var in (
+            self._f_sector,
+            self._f_enabled,
+            self._f_coll,
+            self._f_group,
+            self._f_sub,
+        ):
             var.trace_add("write", lambda *_: self._apply_filters())
 
         body = ttk.Frame(self)
@@ -235,6 +245,12 @@ class QueuesPanel(ttk.Frame):
         except WebitelError as exc:
             queues = []
             error = str(exc)
+        chat_queues: list[Queue] = []
+        if not error:
+            try:
+                chat_queues = client.list_queues(types=[6])
+            except WebitelError:
+                chat_queues = []
         if queues and not error:
             def fetch_agents(q: Queue) -> None:
                 try:
@@ -249,9 +265,14 @@ class QueuesPanel(ttk.Frame):
                 list(pool.map(fetch_agents, queues))
         if not self.winfo_exists():
             return
-        self.after(0, lambda: self._render(queues, error))
+        self.after(0, lambda: self._render(queues, error, chat_queues))
 
-    def _render(self, queues: list[Queue], error: Optional[str]) -> None:
+    def _render(
+        self,
+        queues: list[Queue],
+        error: Optional[str],
+        chat_queues: Optional[list[Queue]] = None,
+    ) -> None:
         if not self.winfo_exists():
             return
         self._reload_btn.configure(state="normal")
@@ -261,6 +282,7 @@ class QueuesPanel(ttk.Frame):
         queues = [q for q in queues if q.type in AGENT_QUEUE_TYPES]
         queues.sort(key=lambda q: (q.type, q.name.lower()))
         self._all_queues = queues
+        self._all_chat_queues = chat_queues or []
         self._refresh_checklist()
         self._apply_filters()
 
@@ -268,15 +290,15 @@ class QueuesPanel(ttk.Frame):
         self._cl_missing: list[tuple[str, str]] = []
         self._cl_present: list[tuple[str, str, Queue]] = []
         for g in self._cl_groups:
-            for t in self._cl_types:
-                found = self._find_collection(g, t)
-                lbl = self._cl_cells[(g, t)]
+            for tp in self._cl_types:
+                found = self._find_collection(g, tp)
+                lbl = self._cl_cells[(g, tp)]
                 if found is not None:
                     lbl.configure(text=f"✓  id {found.id}", foreground="#16a34a")
-                    self._cl_present.append((g, t, found))
+                    self._cl_present.append((g, tp, found))
                 else:
                     lbl.configure(text="✗  нет", foreground="#dc2626")
-                    self._cl_missing.append((g, t))
+                    self._cl_missing.append((g, tp))
         total = len(self._cl_groups) * len(self._cl_types)
         ok = total - len(self._cl_missing)
         if not self._cl_missing:
@@ -300,7 +322,7 @@ class QueuesPanel(ttk.Frame):
         total = len(self._cl_groups) * len(self._cl_types)
         ok = total - len(self._cl_missing)
         missing_lines = "\n".join(
-            f"• {g} — {t}" for g, t in self._cl_missing
+            f"• {g} — {tp}" for g, tp in self._cl_missing
         ) or "—"
         return (
             f"⚠️ #{self._company.name} | #Agents\n"
@@ -346,6 +368,8 @@ class QueuesPanel(ttk.Frame):
             self._cl_alert_status.configure(text="Отправлено ✓", foreground="#16a34a")
 
     def _find_collection(self, group: str, sub: str) -> Optional[Queue]:
+        if sub == "Chat":
+            return self._find_collection_chat(group)
         for q in self._all_queues:
             name = q.name or ""
             if not q.enabled:
@@ -359,12 +383,38 @@ class QueuesPanel(ttk.Frame):
             return q
         return None
 
+    def _find_collection_chat(self, group: str) -> Optional[Queue]:
+        for q in self._all_chat_queues:
+            if not q.enabled:
+                continue
+            name = q.name or ""
+            if "collection" not in name.lower():
+                continue
+            if not self._has_token(name, group):
+                continue
+            return q
+        return None
+
     @staticmethod
     def _has_token(name: str, token: str) -> bool:
         pattern = r"(?:^|[^A-Za-z0-9])" + re.escape(token) + r"(?:$|[^A-Za-z0-9])"
         return re.search(pattern, name, re.IGNORECASE) is not None
 
+    @staticmethod
+    def _is_collection_sector(q: Queue) -> bool:
+        cal = q.calendar
+        return bool(cal and "collection" in (cal.name or "").lower())
+
+    @staticmethod
+    def _is_cc_sector(q: Queue) -> bool:
+        return "CC" in (q.name or "")
+
     def _matches(self, q: Queue) -> bool:
+        sector = self._f_sector.get()
+        if sector == "Collection" and not self._is_collection_sector(q):
+            return False
+        if sector == "КЦ" and not self._is_cc_sector(q):
+            return False
         if self._f_enabled.get() == "Включенные" and not q.enabled:
             return False
         name = q.name or ""

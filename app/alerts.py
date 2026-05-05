@@ -7,8 +7,9 @@ from pathlib import Path
 from .paths import data_dir
 
 ALERT_TEMPLATES: list[tuple[str, str, str]] = [
-    ("queue_checklist",   "🧩 Queues check · Collection", "Автопроверка чек-листа Collection (G1/G2/G3 × Main/APTP/BPTP). Алерт уходит только если есть пробелы."),
-    ("agents_on_break",   "😴 Agents on break > online", "Считает по очередям Collection × {Main, APTP, BPTP}: сколько агентов online vs pause. Алерт, если в любой такой очереди на перерыве больше, чем онлайн."),
+    ("queue_checklist",          "🧩 Queues check · Collection", "Автопроверка чек-листа Collection (G1/G2/G3 × Main/APTP/BPTP). Алерт уходит только если есть пробелы."),
+    ("agents_on_break",          "😴 Agents on break > online", "Считает по очередям Collection × {Main, APTP, BPTP}: сколько агентов online vs pause. Алерт, если в любой такой очереди на перерыве больше, чем онлайн."),
+    ("agents_chats_unanswered",  "🕒 Agents · chats unanswered > 15min", "Перечисляет агентов, у которых есть открытые чаты, где последнее сообщение от клиента старше 15 минут."),
     ("broken_validation", "🔴 Broken Validation", "Сбой валидации диалога — критично. Поля для фикса: stage, alert_type, destination."),
     ("crm_validation",    "⚠️ CRM Validation",   "Расхождение ответа CRM с ожиданиями. Поля: vars_to_check, problem_variable, crm_error, crm_message."),
     ("company_error",     "🔴 Company Error",    "Ошибка на стороне компании. Поля: alert_type, project_index."),
@@ -144,6 +145,16 @@ DEFAULT_AGENT_ALERTS: list[dict] = [
         "start_time": "",
         "enabled": True,
         "notes": "Авто: алерт, если в любой Collection × {Main, APTP, BPTP} очереди на перерыве больше людей, чем онлайн.",
+    },
+    {
+        "name": "Agents chats unanswered > 15min",
+        "template": "agents_chats_unanswered",
+        "schedule": "Каждые 15 минут",
+        "trigger_mode": "event",
+        "working_hours_only": True,
+        "start_time": "",
+        "enabled": True,
+        "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
     },
 ]
 

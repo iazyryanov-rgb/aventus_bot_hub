@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from ..conversations_cache import load_cache, save_cache
 from ..data import Company
+from ..i18n import t
 from ..webitel import (
     Agent,
     ChatDialog,
@@ -44,7 +45,7 @@ class ConversationsPanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="ЧАТЫ",
+            text=t("header_chats"),
             font=("Segoe UI", 9, "bold"),
             foreground="#6b7280",
         ).pack(anchor="w", padx=14, pady=(14, 6))

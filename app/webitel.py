@@ -171,6 +171,26 @@ class WebitelClient:
             out.append(str(it.get("status") or "").lower())
         return out
 
+    def list_queue_agents(self, queue_id: int) -> list[tuple[int, str]]:
+        """Same as list_queue_agent_statuses, but keeps the agent id so callers
+        can dedup an agent that's assigned to multiple queues."""
+        path = (
+            f"/call_center/agents?size=500&queue_id={queue_id}"
+            "&fields=id&fields=status"
+        )
+        data = self._get(path)
+        out: list[tuple[int, str]] = []
+        for it in data.get("items", []) or []:
+            try:
+                aid = int(it.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not aid:
+                continue
+            status = str(it.get("status") or "").lower()
+            out.append((aid, status))
+        return out
+
     def list_agents(self) -> list["Agent"]:
         params = ["size=500"] + [
             f"fields={f}" for f in ("id", "user", "team", "name")

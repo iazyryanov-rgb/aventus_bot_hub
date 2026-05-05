@@ -12,7 +12,13 @@
                 "prod_schema_id": 54,
                 "prod_schema_name": "whatsapp-infobip-lendi-prod"
             }
-        }
+        },
+        "crm_host": "https://api.lendi.ar/api/webhook/webitel/{phone}/status",
+        "crm_access_token": "Basic d2ViaXRlbDp3ZWJpdGVsLWFyZw==",
+        "crm_token_header": "Authorization",
+        "crm_db_engine": "postgres",
+        "crm_db_name": "prod_ar_lendi",
+        "crm_db_port": "55609"
     },
     "CO_": {
         "name": "Credito365",
@@ -27,7 +33,12 @@
                 "prod_schema_id": 110,
                 "prod_schema_name": "whatsapp-infobip-credito365-prod"
             }
-        }
+        },
+        "crm_host": "https://api.credito365.co/api/partner/webitel/client-info?phone={phone}",
+        "crm_access_token": "MWI0ZGNiYWIyY2M3M2VlMzI5NjZmMmRhYTViYzhlNjE=",
+        "crm_db_engine": "mysql",
+        "crm_db_port": "55610",
+        "crm_token_header": "PARTNER-API-KEY"
     },
     "PE_": {
         "name": "Prestamo365",
@@ -42,7 +53,13 @@
                 "prod_schema_id": 80,
                 "prod_schema_name": "whatsapp-infobip-prestamo365-prod"
             }
-        }
+        },
+        "crm_host": "https://api.prestamo365.pe/api/hooks/webitel/webitel-search-client-by-phone/{phone}",
+        "crm_access_token": "4323f240-c69f-45ec-8748-fb503aa65a4b",
+        "crm_token_header": "Webitel-Header",
+        "crm_db_engine": "postgres",
+        "crm_db_name": "prod-prestamo365-pe",
+        "crm_db_port": "55613"
     },
     "CO2_": {
         "name": "TuParcero",
@@ -57,6 +74,11 @@
                 "prod_schema_id": 124,
                 "prod_schema_name": "whatsapp-infobip-tuparcero-prod"
             }
-        }
+        },
+        "crm_db_engine": "mysql",
+        "crm_host": "https://api.tuparcero.co/api/partner/webitel/client-info?phone={phone}",
+        "crm_access_token": "FFFFMjIjYzc0ZmI1NTNjNjM2I2ZDQwYTc0MjgxCCCC",
+        "crm_token_header": "PARTNER-API-KEY",
+        "crm_db_port": "55611"
     }
 }

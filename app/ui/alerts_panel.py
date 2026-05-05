@@ -13,6 +13,7 @@ from ..alerts import (
     send_telegram_message,
 )
 from ..data import Company
+from ..i18n import t
 
 BOT_KIND_NAMES = {
     "voice": "Voice Bot",
@@ -30,7 +31,7 @@ class AlertsPanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="АЛЕРТЫ",
+            text=t("header_alerts"),
             font=("Segoe UI", 9, "bold"),
             foreground="#6b7280",
         ).pack(anchor="w", padx=14, pady=(14, 6))

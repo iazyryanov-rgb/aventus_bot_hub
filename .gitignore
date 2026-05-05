@@ -1,5 +1,9 @@
 data/conversations_cache/
+data/dashboard_cache/
+data/crm_data_cache/
 data/db_catalogs/CO_credito365_schema.json
+data/db_catalogs/PE_prestamo365_schema.json
+data/db_catalogs/AR_lendi_schema.json
 .claude/
 __pycache__/
 *.pyc

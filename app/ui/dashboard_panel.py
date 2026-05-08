@@ -1779,24 +1779,14 @@ class DashboardPanel(ttk.Frame):
 
         if grafana_pg is not None and grafana_pg.is_configured(self._company.key):
             try:
-                # Per-company WA-number filter (otherwise multi-tenant
-                # Webitel domains return mixed traffic).
-                wa_number = ""
-                try:
-                    from ..wa_bot_config import load_raw as _wa_load_raw
-                    wa_cfg = (
-                        ((_wa_load_raw().get(self._company.key) or {})
-                         .get("bots") or {})
-                        .get("whatsapp") or {}
-                    )
-                    wa_number = str(wa_cfg.get("bot_phone_number") or "").strip()
-                except Exception:
-                    wa_number = ""
+                # No per-number filter: the operator wants the dashboard
+                # to reflect all 3 gateways (KC site, KC Meta-direct,
+                # our Infobip) on this Webitel domain. The audit
+                # pipeline narrows to ours via `chat_audit_data`.
                 rows = grafana_pg.list_chat_conversations(
                     since, until,
                     company_key=self._company.key,
                     channel=None,
-                    whatsapp_number=wa_number or None,
                     limit=10000,
                 )
                 # Convert grafana rows → dict with the fields the rest of

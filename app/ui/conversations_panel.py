@@ -123,18 +123,20 @@ class ConversationsPanel(ttk.Frame):
         paned.add(list_pane, weight=2)
         paned.add(chat_pane, weight=3)
 
-        cols = ("title", "channel", "agent", "started", "last")
+        cols = ("title", "channel", "flow", "agent", "started", "last")
         self.tree = ttk.Treeview(list_pane, columns=cols, show="headings", selectmode="browse")
         self.tree.heading("title", text="Имя")
         self.tree.heading("channel", text="Канал")
+        self.tree.heading("flow", text=t("col_flow"))
         self.tree.heading("agent", text="Агент / Бот")
         self.tree.heading("started", text="Начат")
         self.tree.heading("last", text="Последнее")
-        self.tree.column("title", width=200, anchor="w")
+        self.tree.column("title", width=180, anchor="w")
         self.tree.column("channel", width=110, anchor="w")
-        self.tree.column("agent", width=200, anchor="w")
-        self.tree.column("started", width=140, anchor="w")
-        self.tree.column("last", width=140, anchor="w")
+        self.tree.column("flow", width=200, anchor="w")
+        self.tree.column("agent", width=180, anchor="w")
+        self.tree.column("started", width=130, anchor="w")
+        self.tree.column("last", width=130, anchor="w")
         scl = ttk.Scrollbar(list_pane, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scl.set)
         self.tree.pack(side="left", fill="both", expand=True)
@@ -264,19 +266,11 @@ class ConversationsPanel(ttk.Frame):
             transitions land in cache.
           - Display = cache filtered to [since_ms, until_ms].
         """
-        # Per-company filter — stored in companies.json.
-        wa_number = ""
-        try:
-            from ..wa_bot_config import load_raw as _wa_load_raw
-            wa_cfg = (
-                ((_wa_load_raw().get(self._company.key) or {})
-                 .get("bots") or {})
-                .get("whatsapp") or {}
-            )
-            wa_number = str(wa_cfg.get("bot_phone_number") or "").strip()
-        except Exception:
-            wa_number = ""
-
+        # No per-number filter on the conversations panel: the operator
+        # wants to see traffic across ALL gateways for this Webitel
+        # domain (KC's website / KC's Meta-direct / our Infobip),
+        # not just our own. The audit/calibration pipeline still narrows
+        # to OUR gateway — see `chat_audit_data._paginate_dialogs`.
         cache = self._cache
         cached_rows: dict = cache.setdefault("grafana_rows", {})
         coverage: dict = cache.setdefault("grafana_coverage", {})
@@ -304,7 +298,7 @@ class ConversationsPanel(ttk.Frame):
                 fetch_from, fetch_to,
                 company_key=self._company.key,
                 channel=None,
-                whatsapp_number=wa_number or None,
+                # No `whatsapp_numbers` filter here — see comment above.
                 limit=5000,
             )
 
@@ -390,6 +384,7 @@ class ConversationsPanel(ttk.Frame):
                 started_at_ms=created_at,
                 last_msg_at_ms=last,
                 last_msg_text="",
+                flow=str(r.get("flow") or ""),
             ))
         out.sort(key=lambda d: -d.started_at_ms)
         return out
@@ -623,6 +618,7 @@ class ConversationsPanel(ttk.Frame):
                 values=(
                     d.title or d.peer_name or d.peer_id or d.id[:8],
                     d.via_name or d.peer_type,
+                    d.flow or "—",
                     label,
                     self._fmt_time(d.started_at_ms),
                     self._fmt_time(d.last_msg_at_ms),

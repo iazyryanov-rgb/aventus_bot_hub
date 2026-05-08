@@ -417,6 +417,7 @@ def list_chat_conversations(
     only_bot_only: bool = False,
     channel: Optional[str] = None,
     whatsapp_number: Optional[str] = None,
+    whatsapp_numbers: Optional[list[str]] = None,
     limit: int = 500,
     domain_id: int = DEFAULT_DOMAIN_ID,
 ) -> list[dict]:
@@ -432,8 +433,15 @@ def list_chat_conversations(
         flow (props->>'flow').
 
     `queued=True` iff a row in `cc_member_attempt(_history)` exists.
-    Filters: `channel` ('whatsapp', 'telegram', ...), `whatsapp_number`
-    ('+57 315 1586256' for CO_), `only_bot_only=True`.
+
+    Filters:
+      * `channel` ('whatsapp', 'telegram', ...).
+      * `whatsapp_number` (single string) OR `whatsapp_numbers` (list).
+        If both given, the list takes precedence. Pass `None` for both
+        to skip the per-number filter (returns all numbers in the
+        domain — useful when a company has multiple gateways and you
+        want them all in one panel).
+      * `only_bot_only=True` — keep only chats that never joined a queue.
 
     Performance: pulls inner LIMIT first (cheap with index on
     created_at), then resolves queued-status with a left join. If
@@ -442,9 +450,20 @@ def list_chat_conversations(
     filters = []
     if channel:
         filters.append(f" and cconv.props ->> 'chat' = '{_esc_sql(channel)}'")
-    if whatsapp_number:
+    # `whatsapp_numbers` (list) is preferred over the scalar `whatsapp_number`
+    # for backward compat. We collapse a single-item list to `=` for SQL
+    # readability and to keep the planner happy.
+    nums = [n for n in (whatsapp_numbers or []) if n] or (
+        [whatsapp_number] if whatsapp_number else []
+    )
+    if len(nums) == 1:
         filters.append(
-            f" and cconv.props ->> 'whatsapp.number' = '{_esc_sql(whatsapp_number)}'"
+            f" and cconv.props ->> 'whatsapp.number' = '{_esc_sql(nums[0])}'"
+        )
+    elif len(nums) > 1:
+        joined = ", ".join(f"'{_esc_sql(n)}'" for n in nums)
+        filters.append(
+            f" and cconv.props ->> 'whatsapp.number' in ({joined})"
         )
     chan_filter = "".join(filters)
     inner_limit = max(int(limit), 200)

@@ -1,16 +1,22 @@
 """Per-company WhatsApp-Infobip bot configuration panels.
 
-Three independent panels (rendered as separate tabs by BotPanel for
+Independent panels (rendered as separate tabs by BotPanel for
 kind="whatsapp"):
 
   * WaBotOverviewPanel  — gateway, prod schema, CRM endpoints, lookup
     vars, result body fields.
+  * WaBotSendersPanel   — live list of WhatsApp senders pulled from
+    Infobip with quality / status / limit colour-coded — same view as
+    Infobip portal's `Channels and Numbers · WhatsApp · Senders`.
   * WaBotFunctionsPanel — editable list of OpenAI tool/function specs.
   * WaBotPromptsPanel   — main + secondary prompt textareas.
+  * WaBotBuilderPanel   — preview the OpenAI request body the bot will
+    send.
 """
 from __future__ import annotations
 
 import json
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Optional
@@ -21,11 +27,21 @@ from ..wa_bot_config import (
     DEFAULT_BUILDER,
     GATEWAY_NAME,
     build_request_body,
+    get_infobip_senders,
     get_prod_schema,
     load_config,
+    refresh_infobip_senders,
     save_config,
 )
-from .colors import META_FG, OK_FG, TEXT_FG
+from ..wa_senders_state import (
+    STATUS_BAD,
+    STATUS_WARN,
+    format_phone,
+    humanize_limit,
+    humanize_quality,
+    humanize_status,
+)
+from .colors import ERR_FG, META_FG, OK_FG, TEXT_FG
 
 
 class WaBotOverviewPanel(ttk.Frame):
@@ -909,3 +925,175 @@ class WaBotBuilderPanel(ttk.Frame):
         gpt["builder"] = self._gather()
         save_config(self._company.key, self._cfg)
         self._status.configure(text=t("wa_bot_saved"), foreground=OK_FG)
+
+
+# ---------------------------------------------------------------------------
+# Senders panel — live mirror of Infobip portal's WhatsApp Senders table.
+# ---------------------------------------------------------------------------
+
+# Colour swatches for tag-driven row foregrounds. Greens / oranges / reds
+# match what we use across the dashboard alert pages so the operator
+# learns one palette.
+_QUALITY_FG = {
+    "HIGH":    OK_FG,
+    "MEDIUM":  "#d97706",
+    "LOW":     ERR_FG,
+    "UNKNOWN": META_FG,
+}
+
+_LIMIT_FG = {
+    "UNLIMITED":  OK_FG,
+    "LIMIT_100K": OK_FG,
+    "LIMIT_10K":  TEXT_FG,
+    "LIMIT_2K":   "#d97706",
+    "LIMIT_250":  ERR_FG,
+    "LIMIT_NA":   META_FG,
+}
+
+
+def _status_fg(status: str) -> str:
+    if status in STATUS_BAD:
+        return ERR_FG
+    if status in STATUS_WARN:
+        return "#d97706"
+    if status == "CONNECTED":
+        return OK_FG
+    return META_FG
+
+
+class WaBotSendersPanel(ttk.Frame):
+    """Live read-only view of every WhatsApp sender attached to the
+    company's Infobip subaccount. Same columns as the Infobip portal's
+    `Channels & Numbers · WhatsApp · Senders` page (DisplayName /
+    Sender / Registration / Quality / Status / Messaging limit) plus a
+    manual Refresh that drops the in-memory cache and re-pulls.
+
+    Data loads on a daemon thread on panel construction; 30-min
+    in-process cache lives in `app.infobip` so flipping between tabs
+    doesn't hit Infobip every time."""
+
+    def __init__(self, master: tk.Misc, company: Company) -> None:
+        super().__init__(master)
+        self._company = company
+
+        ttk.Label(
+            self,
+            text=t("wa_senders_header"),
+            font=("Segoe UI", 9, "bold"),
+            foreground=META_FG,
+        ).pack(anchor="w", padx=14, pady=(14, 6))
+        code = company.key.rstrip("_")
+        ttk.Label(
+            self,
+            text=f"{code} — {company.name} ({company.country})",
+            font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill="x", padx=14, pady=(0, 8))
+        self._refresh_btn = ttk.Button(
+            toolbar, text=t("btn_refresh"), command=self._reload,
+        )
+        self._refresh_btn.pack(side="left")
+        self._status = ttk.Label(toolbar, text=t("dash_loading"), foreground=META_FG)
+        self._status.pack(side="left", padx=(12, 0))
+
+        cols = ("display", "sender", "registration", "quality", "status", "limit")
+        self.tree = ttk.Treeview(
+            self, columns=cols, show="headings", selectmode="browse",
+        )
+        self.tree.heading("display", text=t("wa_senders_col_display"))
+        self.tree.heading("sender", text=t("wa_senders_col_sender"))
+        self.tree.heading("registration", text=t("wa_senders_col_registration"))
+        self.tree.heading("quality", text=t("wa_senders_col_quality"))
+        self.tree.heading("status", text=t("wa_senders_col_status"))
+        self.tree.heading("limit", text=t("wa_senders_col_limit"))
+        self.tree.column("display", width=220, anchor="w")
+        self.tree.column("sender", width=170, anchor="w")
+        self.tree.column("registration", width=160, anchor="w")
+        self.tree.column("quality", width=110, anchor="w")
+        self.tree.column("status", width=140, anchor="w")
+        self.tree.column("limit", width=160, anchor="w")
+        scl = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scl.set)
+        self.tree.pack(side="left", fill="both", expand=True, padx=(14, 0), pady=(0, 14))
+        scl.pack(side="right", fill="y", padx=(0, 14), pady=(0, 14))
+
+        self._reload()
+
+    # ---------- data load ----------
+
+    def _reload(self) -> None:
+        self._refresh_btn.configure(state="disabled")
+        self._status.configure(text=t("dash_loading"), foreground=META_FG)
+        for iid in self.tree.get_children():
+            self.tree.delete(iid)
+        threading.Thread(target=self._reload_worker, daemon=True).start()
+
+    def _reload_worker(self) -> None:
+        try:
+            senders = refresh_infobip_senders(self._company.key)
+            err: Optional[str] = None
+        except Exception as exc:  # noqa: BLE001 — UI thread mustn't crash
+            senders, err = [], f"{type(exc).__name__}: {exc}"
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._render(senders, err))
+
+    def _render(self, senders: list[dict], err: Optional[str]) -> None:
+        if not self.winfo_exists():
+            return
+        self._refresh_btn.configure(state="normal")
+        if err:
+            self._status.configure(
+                text=f"{t('wa_senders_err')}: {err}", foreground=ERR_FG,
+            )
+            return
+        if not senders:
+            self._status.configure(
+                text=t("wa_senders_none"), foreground=META_FG,
+            )
+            return
+
+        # Tag styling — Tk's Treeview only supports ONE tag's foreground
+        # per row, so we pick the most-severe colour and apply it
+        # row-wide. Status takes precedence (BANNED is the loudest
+        # signal), then quality, then limit.
+        configured_tags: set[str] = set()
+        for s in senders:
+            quality = str(s.get("qualityRating") or "")
+            status = str(s.get("connectionStatus") or "")
+            limit = str(s.get("limit") or "")
+            registration = str(s.get("registrationStatus") or "")
+
+            row_fg = _status_fg(status)
+            if row_fg == OK_FG:
+                # Promote a not-OK quality / limit colour onto an
+                # otherwise-green row so the operator notices early.
+                row_fg = (
+                    _QUALITY_FG.get(quality, TEXT_FG)
+                    if quality not in ("HIGH", "")
+                    else _LIMIT_FG.get(limit, TEXT_FG)
+                )
+            tag = f"fg_{row_fg.lstrip('#')}"
+            if tag not in configured_tags:
+                self.tree.tag_configure(tag, foreground=row_fg)
+                configured_tags.add(tag)
+
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    str(s.get("displayName") or "—"),
+                    format_phone(str(s.get("sender") or "")),
+                    registration or "—",
+                    humanize_quality(quality),
+                    humanize_status(status),
+                    humanize_limit(limit),
+                ),
+                tags=(tag,),
+            )
+        self._status.configure(
+            text=t("wa_senders_loaded").format(n=len(senders)),
+            foreground=TEXT_FG,
+        )

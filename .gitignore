@@ -9,7 +9,9 @@ data/db_catalogs/AR_lendi_schema.json
 data/api_keys.json
 data/audit_history/
 data/audit_pending/
+data/audit_jobs/
 data/calibration_cycle/
+data/wa_senders_state/
 .tmp_schemas/
 all_nodes.txt
 .claude/

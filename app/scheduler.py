@@ -951,6 +951,93 @@ def _build_crm_call_list_failed_text(company: Company) -> Optional[str]:
 
 # ---------------------------------------------------------------------------
 
+def _build_wa_senders_health_text(company: Company) -> Optional[str]:
+    """Snapshot Infobip's `/whatsapp/2/senders` for this company, diff
+    against the previous snapshot in `data/wa_senders_state/<co>.json`,
+    and emit an alert if the delta contains anything actionable.
+
+    Suppression rules:
+      * First run (no snapshot file yet) — silently save baseline,
+        return None. The next run actually compares.
+      * Empty senders list (Infobip down or no Infobip bot in tenant)
+        — return None. We don't want a "lost all senders" alert from
+        a transient API hiccup; let the cache return-last-good logic
+        in `infobip.cached_senders` handle it.
+      * Diff produced only INFO-level changes (recoveries, new sender
+        appeared healthy) — save snapshot, return None. The senders
+        panel surfaces these visually; alerts are reserved for
+        problems.
+    """
+    from . import wa_senders_state as state
+    from .wa_bot_config import get_infobip_senders
+
+    cur = get_infobip_senders(company.key)
+    if not cur:
+        # No senders pulled — likely Infobip transient or the company
+        # has no Infobip bot. Don't churn the snapshot or emit alerts.
+        return None
+
+    if not state.has_snapshot(company.key):
+        state.save_snapshot(company.key, cur)
+        return None
+
+    prev = state.load_snapshot(company.key)
+    changes = state.diff(prev, cur)
+    if not changes:
+        # Senders identical — refresh the snapshot timestamp by re-saving
+        # (cheap) and skip the alert.
+        state.save_snapshot(company.key, cur)
+        return None
+
+    # Filter to actionable severities. INFO-only batches don't justify
+    # a Telegram ping; the panel shows them.
+    actionable = [c for c in changes if c.severity != state.SEV_INFO]
+    state.save_snapshot(company.key, cur)
+    if not actionable:
+        return None
+
+    severity = state.worst_severity(actionable)
+    bullets = []
+    for ch in actionable[:25]:
+        sender_label = state.format_phone(ch.sender)
+        name = ch.display_name or sender_label
+        bullets.append(
+            f"<b>{name}</b> ({sender_label}) — {ch.note}"
+        )
+    if len(actionable) > 25:
+        bullets.append(f"…and {len(actionable) - 25} more change(s)")
+
+    counts_by_field: dict[str, int] = {}
+    for ch in actionable:
+        counts_by_field[ch.field] = counts_by_field.get(ch.field, 0) + 1
+    metrics = [("Total changes", str(len(actionable)))]
+    for field, n in sorted(counts_by_field.items()):
+        metrics.append((field.capitalize(), str(n)))
+    metrics.append(("Senders tracked", str(len(cur))))
+
+    return render_alert_html(
+        severity=severity,
+        title="WhatsApp senders · health changed",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="WhatsApp",
+        metrics=metrics,
+        bullets=bullets,
+        body=(
+            "Infobip reported a change in our WhatsApp sender(s) state. "
+            "Statuses like BANNED / RESTRICTED / RATE_LIMITED stop "
+            "outbound traffic immediately; quality / messaging-limit "
+            "drops degrade reach. Compare against the senders tab in "
+            "the WhatsApp bot panel for the current state."
+        ),
+        action_hint="Open Infobip portal · Channels & Numbers · WhatsApp · Senders:",
+        action_command="https://portal.infobip.com/channels-and-numbers/channels/whatsapp/senders",
+    )
+
+
+# ---------------------------------------------------------------------------
+
 TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "queue_checklist": _build_queue_checklist_text,
     "agents_on_break": _build_agents_on_break_text,
@@ -962,6 +1049,7 @@ TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "webitel_api_down": _build_webitel_api_down_text,
     "wa_chat_volume_drop": _build_wa_chat_volume_drop_text,
     "wa_bot_silent": _build_wa_bot_silent_text,
+    "wa_senders_health": _build_wa_senders_health_text,
     "cohort_imbalance": _build_cohort_imbalance_text,
     "crm_call_list_failed": _build_crm_call_list_failed_text,
 }

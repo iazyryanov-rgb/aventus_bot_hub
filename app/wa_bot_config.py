@@ -457,6 +457,116 @@ def set_candidate_schema(
     save_raw(raw)
 
 
+INFOBIP_PROVIDER = "infobip_whatsapp"
+
+
+def get_infobip_chat_bot(company_key: str):
+    """Return our Webitel chat-bot profile for the company's Infobip
+    WhatsApp gateway, or None when no such bot is registered. The
+    profile carries the per-tenant Infobip credentials in `metadata`
+    (`api_key`, `url`) — single source of truth lives in Webitel, not
+    in `companies.json`.
+
+    Returns a `webitel.ChatBot` instance.
+    """
+    info = load_raw().get(company_key, {}) or {}
+    host = str(info.get("webitel_host") or "").strip()
+    token = str(info.get("webitel_access_token") or "").strip()
+    if not host or not token:
+        return None
+    # Lazy import — `webitel` pulls urllib + several dataclasses that
+    # the calibration tooling and CLI code don't always need.
+    from .webitel import WebitelClient, WebitelError
+    try:
+        bots = WebitelClient(host, token).list_chat_bots()
+    except WebitelError:
+        return None
+    for b in bots:
+        if b.provider == INFOBIP_PROVIDER and b.enabled:
+            return b
+    return None
+
+
+def get_owned_whatsapp_numbers(company_key: str) -> list[str]:
+    """Return the list of WhatsApp numbers attached to this company's
+    Infobip account (E.164 strings — Infobip preserves the formatting,
+    typically '+573151586256').
+
+    Discovery flow:
+      1. Pull the chat-bot profile from Webitel (`/api/chat/bots`) and
+         pick the one whose `provider == 'infobip_whatsapp'`. Its
+         `metadata` carries `api_key` + `url` (= Infobip personalised
+         base URL like `https://n8vpk5.api-us.infobip.com`).
+      2. Hit Infobip's `/numbers/1/numbers` (cached 30 min in
+         `app.infobip`) and keep entries whose `capabilities[]`
+         contains `WHATSAPP`.
+      3. On any failure (Webitel unreachable, no Infobip bot in this
+         tenant, Infobip 4xx) → fall back to the legacy single-number
+         field `bots.whatsapp.bot_phone_number` if present.
+
+    The hub uses this list to scope the AI chat audit input to OUR
+    gateway — calibration must NOT see KC-bot chats from other
+    gateways that also live in the same Webitel domain.
+    """
+    bot = get_infobip_chat_bot(company_key)
+    if bot is not None:
+        api_key = str(bot.metadata.get("api_key") or "").strip()
+        base_url = str(bot.metadata.get("url") or "").strip()
+        if api_key and base_url:
+            from . import infobip
+            nums = infobip.cached_owned_whatsapp_numbers(
+                company_key, api_key, base_url=base_url,
+            )
+            if nums:
+                return nums
+    # Legacy fallback — single number kept in companies.json under
+    # `bots.whatsapp.bot_phone_number` from the pre-discovery era.
+    info = load_raw().get(company_key, {}) or {}
+    wa = ((info.get("bots") or {}).get("whatsapp") or {})
+    legacy = str(wa.get("bot_phone_number") or "").strip()
+    return [legacy] if legacy else []
+
+
+def get_infobip_senders(company_key: str) -> list[dict]:
+    """Live (cached 30 min) list of WhatsApp senders for the company's
+    Infobip subaccount, with quality / status / limit / registration
+    fields per Infobip's `/whatsapp/2/senders`. Returns [] when the
+    company doesn't have an Infobip chat-bot in Webitel.
+
+    Used by the senders panel (UI) and the alert builder.
+    """
+    bot = get_infobip_chat_bot(company_key)
+    if bot is None:
+        return []
+    api_key = str(bot.metadata.get("api_key") or "").strip()
+    base_url = str(bot.metadata.get("url") or "").strip()
+    if not api_key or not base_url:
+        return []
+    from . import infobip
+    return infobip.cached_senders(
+        company_key, api_key, base_url=base_url,
+    )
+
+
+def refresh_infobip_senders(company_key: str) -> list[dict]:
+    """Drop the cache for this company and re-pull. Hooked to the
+    'Refresh' button in the senders panel."""
+    from . import infobip
+    infobip.invalidate_cache(company_key)
+    return get_infobip_senders(company_key)
+
+
+def get_infobip_gateway_name(company_key: str) -> str:
+    """Live name of the Infobip chat-bot in Webitel, used by the audit
+    pipeline as the `via.name` filter. Falls back to the historical
+    constant `WhatsApp-Infobip` when discovery fails so audits still
+    work with their previous behaviour."""
+    bot = get_infobip_chat_bot(company_key)
+    if bot is not None and bot.name:
+        return bot.name
+    return GATEWAY_NAME
+
+
 def clear_candidate_schema(company_key: str) -> None:
     """Drop candidate fields from companies.json (after promotion or abort)."""
     raw = load_raw()

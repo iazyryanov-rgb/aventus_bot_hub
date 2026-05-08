@@ -55,6 +55,27 @@ class ChatDialog:
     started_at_ms: int
     last_msg_at_ms: int
     last_msg_text: str
+    # Routing-schema name that handled the chat (Webitel `props->>'flow'`).
+    # Populated only when the data source carries it (Grafana/Postgres
+    # path); REST `/chat/dialogs` doesn't expose it, so REST-mode rows
+    # leave this empty.
+    flow: str = ""
+
+
+@dataclass
+class ChatBot:
+    """A chat-bot profile registered in Webitel — one per WhatsApp/
+    Messenger/webchat gateway. Returned by `/api/chat/bots`. The
+    provider-specific connection params (Infobip API key + base URL,
+    Meta tokens, webchat config) live in `metadata` as a flat dict."""
+    id: str
+    name: str
+    uri: str          # webhook URI Webitel exposes for this bot
+    flow_id: str      # routing schema id this bot dispatches to
+    flow_name: str    # routing schema human name
+    enabled: bool
+    provider: str     # 'infobip_whatsapp' | 'messenger' | 'webchat' | ...
+    metadata: dict    # provider-specific config blob
 
 
 @dataclass
@@ -347,6 +368,39 @@ class WebitelClient:
             if pid:
                 peers.setdefault(pid, peer)
         return msgs, peers
+
+    def list_chat_bots(self) -> list[ChatBot]:
+        """Return every chat-bot profile registered in this tenant —
+        WhatsApp (Infobip / Meta-direct), Facebook Messenger, Telegram,
+        webchat etc. The hub uses this to discover the per-tenant
+        gateway settings (notably the Infobip api_key + base URL stored
+        in `metadata`) without forcing the operator to copy them into
+        companies.json by hand.
+
+        We request `metadata` explicitly via `fields=` because the API
+        omits it from the default response (treats it as 'operational'
+        rather than 'application' fields, see chat_manager).
+        """
+        path = (
+            "/chat/bots?size=500"
+            "&fields=id&fields=name&fields=uri"
+            "&fields=flow&fields=enabled&fields=provider&fields=metadata"
+        )
+        data = self._get(path)
+        out: list[ChatBot] = []
+        for it in data.get("items", []) or []:
+            flow = it.get("flow") or {}
+            out.append(ChatBot(
+                id=str(it.get("id", "") or ""),
+                name=str(it.get("name", "") or ""),
+                uri=str(it.get("uri", "") or ""),
+                flow_id=str(flow.get("id", "") or ""),
+                flow_name=str(flow.get("name", "") or ""),
+                enabled=bool(it.get("enabled")),
+                provider=str(it.get("provider", "") or ""),
+                metadata=dict(it.get("metadata") or {}),
+            ))
+        return out
 
     def list_chat_schemas(self) -> list[ChatSchema]:
         data = self._get("/routing/schema?type=chat&size=500")

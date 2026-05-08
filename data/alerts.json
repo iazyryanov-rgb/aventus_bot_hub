@@ -76,6 +76,17 @@
             ],
             "whatsapp": [
                 {
+                    "name": "WA Senders · health (Infobip)",
+                    "template": "wa_senders_health",
+                    "schedule": "Каждые 30 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": false,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Поллит Infobip /whatsapp/2/senders. Алерт при понижении quality / лимита и при переходе в BANNED/RESTRICTED/RATE_LIMITED/FLAGGED. INFO-изменения (новый сендер, recovery) видны в панели «Сендеры», в TG не уходят. Первый запуск — тихо сохраняет baseline.",
+                    "id": "wa_senders_health_co"
+                },
+                {
                     "name": "AI audit · WhatsApp · daily",
                     "template": "ai_audit",
                     "schedule": "Раз в сутки",

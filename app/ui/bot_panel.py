@@ -28,12 +28,17 @@ class BotPanel(ttk.Frame):
                 WaBotFunctionsPanel,
                 WaBotOverviewPanel,
                 WaBotPromptsPanel,
+                WaBotSendersPanel,
             )
             from .chat_audit_panel import ChatAuditPanel
             from .calibration_panel import CalibrationPanel
             self.notebook.add(
                 WaBotOverviewPanel(self.notebook, company),
                 text=t("wa_bot_tab_overview"),
+            )
+            self.notebook.add(
+                WaBotSendersPanel(self.notebook, company),
+                text=t("wa_bot_tab_senders"),
             )
             self.notebook.add(
                 WaBotFunctionsPanel(self.notebook, company),

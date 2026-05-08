@@ -22,6 +22,7 @@ from typing import Optional
 
 from .data import Company
 from .db import connect_for_company
+from .wa_bot_config import get_infobip_gateway_name
 from .webitel import ChatDialog, ChatMessage, ChatPeer, WebitelClient, WebitelError
 
 
@@ -51,8 +52,15 @@ class ChatRecord:
 # ---------------------------------------------------------------------------
 
 def _paginate_dialogs(
-    client: WebitelClient, since_ms: int, until_ms: int
+    client: WebitelClient, since_ms: int, until_ms: int,
+    *, gateway_name: Optional[str] = None,
 ) -> list[dict]:
+    """Page through `/chat/dialogs`, optionally narrowed to a single
+    gateway by `via.name`. The audit/calibration pipeline uses this to
+    keep the AI's eyes ON OUR GATEWAY ONLY — KC-bot chats from other
+    WA gateways in the same Webitel domain must not pollute the audit
+    input.
+    """
     seen: set[str] = set()
     out: list[dict] = []
     for page in range(1, MAX_PAGES + 1):
@@ -69,6 +77,11 @@ def _paginate_dialogs(
             break
         for it in new:
             seen.add(it["id"])
+        if gateway_name:
+            new = [
+                it for it in new
+                if str((it.get("via") or {}).get("name") or "") == gateway_name
+            ]
         out.extend(new)
         if len(items) < PAGE_SIZE or data.get("next") is False:
             break
@@ -265,7 +278,15 @@ def collect_period(
 ) -> tuple[list[ChatRecord], dict]:
     """Return (records, meta). Meta contains counts and a no-PII summary."""
     client = WebitelClient(company.webitel_host, company.webitel_access_token)
-    raw_dialogs = _paginate_dialogs(client, since_ms, until_ms)
+    # Audit must see ONLY chats handled by our WhatsApp gateway. KC-bot
+    # chats (KC site, KC Meta-direct) live in the same Webitel domain
+    # but aren't ours to optimise. Webitel stamps the gateway label on
+    # every dialog as `via.name` — we look it up live by hitting
+    # `/api/chat/bots` and picking the `infobip_whatsapp` provider.
+    gateway_name = get_infobip_gateway_name(company.key)
+    raw_dialogs = _paginate_dialogs(
+        client, since_ms, until_ms, gateway_name=gateway_name,
+    )
     if not raw_dialogs:
         return [], {"total_dialogs": 0, "skipped": 0, "phone_lookups": 0}
 

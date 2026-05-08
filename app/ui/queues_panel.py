@@ -6,7 +6,13 @@ from concurrent.futures import ThreadPoolExecutor
 from tkinter import ttk
 from typing import Optional
 
-from ..alerts import TelegramError, load_alerts_config, send_telegram_message
+from ..alert_format import render_alert_html
+from ..alerts import (
+    TelegramError,
+    ensure_company_topic,
+    load_alerts_config,
+    send_telegram_message,
+)
 from ..data import Company
 from ..i18n import t
 from ..webitel import QUEUE_TYPE_NAMES, Queue, WebitelClient, WebitelError
@@ -321,19 +327,21 @@ class QueuesPanel(ttk.Frame):
     def _build_checklist_alert_text(self) -> str:
         total = len(self._cl_groups) * len(self._cl_types)
         ok = total - len(self._cl_missing)
-        missing_lines = "\n".join(
-            f"• {g} — {tp}" for g, tp in self._cl_missing
-        ) or "—"
-        return (
-            f"⚠️ #{self._company.name} | #Agents\n"
-            f"🧩 Queues check · Collection\n"
-            f"📊 Coverage: {ok} / {total}\n"
-            f"\n"
-            f"❌ Missing enabled queues:\n"
-            f"{missing_lines}\n"
-            f"\n"
-            f"✅ Already configured: {ok}\n"
-            f"🌐 {self._company.webitel_host.rstrip('/')}"
+        bullets = [f"{g} — {tp}" for g, tp in self._cl_missing]
+        return render_alert_html(
+            severity="warning",
+            title="Queues check · Collection",
+            company_code=self._company.code,
+            company_name=self._company.name,
+            webitel_host=self._company.webitel_host,
+            category="Agents",
+            metrics=[
+                ("Coverage", f"{ok} / {total}"),
+                ("Missing", str(len(self._cl_missing))),
+                ("Configured", str(ok)),
+            ],
+            bullets=bullets,
+            body="The following queues are not enabled or not present:",
         )
 
     def _send_checklist_alert(self) -> None:
@@ -349,9 +357,14 @@ class QueuesPanel(ttk.Frame):
     def _send_alert_worker(self, text: str) -> None:
         cfg = load_alerts_config()
         tg = cfg.get("telegram", {})
+        topic_id = ensure_company_topic(cfg, self._company)
         err: Optional[str] = None
         try:
-            send_telegram_message(tg.get("bot_token", ""), tg.get("chat_id", ""), text)
+            send_telegram_message(
+                tg.get("bot_token", ""), tg.get("chat_id", ""), text,
+                parse_mode="HTML",
+                message_thread_id=topic_id,
+            )
         except TelegramError as e:
             err = str(e)
         if not self.winfo_exists():

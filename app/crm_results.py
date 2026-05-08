@@ -30,7 +30,12 @@ Adding another company:
 """
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
 from typing import Optional
+
+from .data import Company, load_raw
 
 
 # ---------- field schema ----------
@@ -124,3 +129,41 @@ def list_field_names(company_key: str) -> list[str]:
     """Just the keys that go into JSON, for quick checks / UI."""
     schema = get_body_schema(company_key)
     return [f["name"] for f in schema] if schema else []
+
+
+def post_result(
+    company: Company,
+    body: dict,
+    timeout: float = 20.0,
+) -> tuple[int, str, Optional[str]]:
+    """POST `body` (JSON) to company's `crm_results_host`. Returns
+    (status_code, response_body_preview, error_message_or_None)."""
+    info = load_raw().get(company.key, {})
+    url = (info.get("crm_results_host") or "").strip()
+    if not url:
+        return 0, "", "В компании не задан crm_results_host"
+    header_name = (info.get("crm_token_header") or "").strip()
+    header_value = (info.get("crm_access_token") or "").strip()
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "AventusBotHub/1.0",
+    }
+    if header_name and header_value:
+        headers[header_name] = header_value
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = r.read(4000).decode("utf-8", errors="replace")
+            return r.getcode() or 0, resp, None
+    except urllib.error.HTTPError as e:
+        try:
+            resp = e.read(4000).decode("utf-8", errors="replace")
+        except Exception:
+            resp = ""
+        return e.code, resp, f"HTTP {e.code} {e.reason}"
+    except urllib.error.URLError as e:
+        return 0, "", f"Сеть: {e.reason}"
+    except Exception as e:
+        return 0, "", f"{type(e).__name__}: {e}"

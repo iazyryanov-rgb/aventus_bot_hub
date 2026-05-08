@@ -10,6 +10,13 @@ class WebitelError(Exception):
     pass
 
 
+class WebitelConflict(WebitelError):
+    """Raised when an update target was modified by someone else between fetch
+    and push (detected by an `updated_at` mismatch). Caller is expected to
+    re-fetch and re-apply."""
+    pass
+
+
 @dataclass
 class ChatSchema:
     id: int
@@ -126,6 +133,48 @@ class WebitelClient:
             raise WebitelError(f"Network error: {e.reason}") from e
         except (json.JSONDecodeError, ValueError) as e:
             raise WebitelError(f"Invalid response: {e}") from e
+
+    def _write(self, method: str, path: str, body: dict) -> dict:
+        url = f"{self.host}/api{path}"
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "X-Webitel-Access": self.token,
+                "Content-Type": "application/json",
+            },
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                raw = r.read()
+                if not raw:
+                    return {}
+                return json.loads(raw.decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:500]
+            except Exception:
+                pass
+            msg = f"HTTP {e.code} {e.reason}"
+            if detail:
+                msg = f"{msg}: {detail}"
+            raise WebitelError(msg) from e
+        except urllib.error.URLError as e:
+            raise WebitelError(f"Network error: {e.reason}") from e
+        except (json.JSONDecodeError, ValueError) as e:
+            raise WebitelError(f"Invalid response: {e}") from e
+
+    def _put(self, path: str, body: dict) -> dict:
+        return self._write("PUT", path, body)
+
+    def _post(self, path: str, body: dict) -> dict:
+        return self._write("POST", path, body)
+
+    def get_calendar(self, calendar_id: int) -> dict:
+        return self._get(f"/calendars/{int(calendar_id)}")
 
     def list_queues(self, types: Optional[list[int]] = None) -> list[Queue]:
         params = ["size=500"]
@@ -308,6 +357,24 @@ class WebitelClient:
             except (TypeError, ValueError):
                 continue
         return out
+
+    def get_schema(self, schema_id: int) -> dict:
+        """Read the full routing schema object: {id, name, type, schema (compiled),
+        payload (visual), created_at, updated_at, updated_by, tags, ...}.
+        Used by the calibration loop to round-trip targeted patches."""
+        return self._get(f"/routing/schema/{int(schema_id)}")
+
+    def update_schema(self, schema_id: int, body: dict) -> dict:
+        """Replace the routing schema with `body`. Webitel recompiles `schema`
+        from `payload` on save, so callers normally fetch the full object,
+        mutate `payload`, and pass it back here unchanged otherwise."""
+        return self._put(f"/routing/schema/{int(schema_id)}", body)
+
+    def create_schema(self, body: dict) -> dict:
+        """Create a brand-new routing schema. Body must NOT include
+        `id`/`created_at`/`updated_at`/`created_by`/`updated_by` — Webitel
+        assigns them. Returns the created object including its new `id`."""
+        return self._post("/routing/schema", body)
 
 
 def find_whatsapp_infobip_prod(

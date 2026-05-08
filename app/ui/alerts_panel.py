@@ -9,9 +9,12 @@ from ..alerts import (
     TelegramError,
     delete_bot_alert,
     get_bot_alerts,
+    ensure_company_topic,
+    get_company_topic,
     load_alerts_config,
     send_telegram_message,
 )
+from ..alert_format import render_alert_html
 from ..data import Company
 from ..i18n import t
 
@@ -19,6 +22,7 @@ BOT_KIND_NAMES = {
     "voice": "Voice Bot",
     "whatsapp": "WhatsApp Infobip bot",
     "agents": "Agents",
+    "company": "Компания (дашборд)",
 }
 
 
@@ -50,40 +54,40 @@ class AlertsPanel(ttk.Frame):
         btn_row = ttk.Frame(ch)
         btn_row.pack(fill="x")
         self._test_btn = ttk.Button(
-            btn_row, text="Отправить тестовое сообщение", command=self._send_test
+            btn_row, text=t("btn_send_test_msg"), command=self._send_test
         )
         self._test_btn.pack(side="left")
         self._test_status = ttk.Label(btn_row, text="", foreground="#6b7280")
         self._test_status.pack(side="left", padx=(12, 0))
 
         # Planner block
-        sched = ttk.LabelFrame(self, text="Планировщик алертов", padding=12)
+        sched = ttk.LabelFrame(self, text=t("alerts_scheduler"), padding=12)
         sched.pack(fill="both", expand=True, padx=14, pady=(0, 10))
 
         toolbar = ttk.Frame(sched)
         toolbar.pack(fill="x", pady=(0, 8))
-        ttk.Button(toolbar, text="Добавить", command=self._add).pack(side="left")
+        ttk.Button(toolbar, text=t("btn_add"), command=self._add).pack(side="left")
         self._edit_btn = ttk.Button(
-            toolbar, text="Изменить", command=self._edit, state="disabled"
+            toolbar, text=t("btn_edit"), command=self._edit, state="disabled"
         )
         self._edit_btn.pack(side="left", padx=(8, 0))
         self._del_btn = ttk.Button(
-            toolbar, text="Удалить", command=self._delete, state="disabled"
+            toolbar, text=t("btn_delete"), command=self._delete, state="disabled"
         )
         self._del_btn.pack(side="left", padx=(8, 0))
         self._send_btn = ttk.Button(
-            toolbar, text="Отправить пробный", command=self._send_one, state="disabled"
+            toolbar, text=t("btn_send_test"), command=self._send_one, state="disabled"
         )
         self._send_btn.pack(side="left", padx=(8, 0))
 
         cols = ("name", "template", "trigger", "schedule", "start", "enabled")
         self.tree = ttk.Treeview(sched, columns=cols, show="headings", selectmode="browse")
-        self.tree.heading("name", text="Имя")
-        self.tree.heading("template", text="Шаблон")
-        self.tree.heading("trigger", text="Триггер")
-        self.tree.heading("schedule", text="Периодичность")
-        self.tree.heading("start", text="Старт")
-        self.tree.heading("enabled", text="Статус")
+        self.tree.heading("name", text=t("col_name"))
+        self.tree.heading("template", text=t("col_template"))
+        self.tree.heading("trigger", text=t("col_trigger"))
+        self.tree.heading("schedule", text=t("col_schedule"))
+        self.tree.heading("start", text=t("col_start"))
+        self.tree.heading("enabled", text=t("col_status"))
         self.tree.column("name", width=200, anchor="w")
         self.tree.column("template", width=220, anchor="w")
         self.tree.column("trigger", width=110, anchor="w", stretch=False)
@@ -98,7 +102,7 @@ class AlertsPanel(ttk.Frame):
         self._reload_alerts()
 
         # Templates reference (collapsible-like, just a labelframe)
-        ref = ttk.LabelFrame(self, text="Доступные шаблоны (поля для фикса)", padding=12)
+        ref = ttk.LabelFrame(self, text=t("alerts_templates_ref"), padding=12)
         ref.pack(fill="x", padx=14, pady=(0, 14))
         for _slug, title, desc in ALERT_TEMPLATES:
             row = ttk.Frame(ref)
@@ -188,13 +192,22 @@ class AlertsPanel(ttk.Frame):
         tpl = ALERT_TEMPLATE_BY_SLUG.get(slug)
         title = tpl[1] if tpl else "Alert"
         bot_label = BOT_KIND_NAMES.get(self._kind, self._kind)
-        return (
-            f"⚠️ #{self._company.name} | #{bot_label}\n"
-            f"{title}\n"
-            f"📛 Alert: {alert.get('name', '')}\n"
-            f"🕒 Schedule: {alert.get('schedule') or '—'}"
-            f"{(' (start ' + alert['start_time'] + ')') if alert.get('start_time') else ''}\n"
-            f"📝 Notes: {alert.get('notes') or '—'}"
+        schedule_str = alert.get("schedule") or "—"
+        if alert.get("start_time"):
+            schedule_str += f" (start {alert['start_time']})"
+        return render_alert_html(
+            severity="info",
+            title=f"Test · {title}",
+            company_code=self._company.code,
+            company_name=self._company.name,
+            webitel_host=self._company.webitel_host,
+            category=bot_label,
+            context_kv=[
+                ("Alert", alert.get("name", "")),
+                ("Schedule", schedule_str),
+                ("Notes", alert.get("notes") or "—"),
+            ],
+            footer="(test send from the UI; this is not a real trip)",
         )
 
     def _send_one(self) -> None:
@@ -202,28 +215,42 @@ class AlertsPanel(ttk.Frame):
         if not a:
             return
         self._send_btn.configure(state="disabled")
-        self._test_status.configure(text="Отправка пробного…", foreground="#6b7280")
+        self._test_status.configure(text=t("alerts_sending_test"), foreground="#6b7280")
         text = self._build_test_text_for_alert(a)
         threading.Thread(target=self._send_worker, args=(text,), daemon=True).start()
 
     def _send_test(self) -> None:
         self._test_btn.configure(state="disabled")
-        self._test_status.configure(text="Отправка…", foreground="#6b7280")
+        self._test_status.configure(text=t("alerts_sending"), foreground="#6b7280")
         bot_label = BOT_KIND_NAMES.get(self._kind, self._kind)
-        text = (
-            f"⚠️ #{self._company.name} | #{bot_label}\n"
-            f"✅ Aventus Bot Hub — channel test\n"
-            f"🌐 {self._company.country}"
+        text = render_alert_html(
+            severity="ok",
+            title="Aventus Bot Hub · channel test",
+            company_code=self._company.code,
+            company_name=self._company.name,
+            webitel_host=self._company.webitel_host,
+            category=bot_label,
+            metrics=[("Country", self._company.country or "—")],
+            footer="(connectivity check — no real alert)",
         )
         threading.Thread(target=self._send_worker, args=(text,), daemon=True).start()
 
     def _send_worker(self, text: str) -> None:
-        tg = self._cfg.get("telegram", {})
+        # Re-read config so newly bound topic IDs take effect without restart.
+        cfg = load_alerts_config()
+        tg = cfg.get("telegram", {})
         token = tg.get("bot_token", "")
         chat_id = tg.get("chat_id", "")
+        # ensure_company_topic creates the topic on the fly if missing —
+        # crucial for the very first send before the scheduler ever ticked.
+        topic_id = ensure_company_topic(cfg, self._company)
         err: Optional[str] = None
         try:
-            send_telegram_message(token, chat_id, text)
+            send_telegram_message(
+                token, chat_id, text,
+                parse_mode="HTML",
+                message_thread_id=topic_id,
+            )
         except TelegramError as e:
             err = str(e)
         if not self.winfo_exists():
@@ -238,4 +265,4 @@ class AlertsPanel(ttk.Frame):
         if err:
             self._test_status.configure(text=f"Ошибка: {err}", foreground="#dc2626")
         else:
-            self._test_status.configure(text="Сообщение отправлено ✓", foreground="#16a34a")
+            self._test_status.configure(text=t("alerts_sent_ok"), foreground="#16a34a")

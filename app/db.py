@@ -95,6 +95,19 @@ def connect(
     return _connect_mysql(host, port, user, password, timeout)
 
 
+def connect_for_company(company):
+    """Open a CRM-DB connection using the company's `crm_db_*` settings."""
+    from .data import load_raw
+    info = load_raw().get(company.key, {})
+    engine = (info.get("crm_db_engine") or "mysql").lower()
+    port_str = str(info.get("crm_db_port") or "").strip()
+    if not port_str:
+        raise ValueError("crm_db_port не задан")
+    port = int(port_str)
+    db_name = str(info.get("crm_db_name") or "").strip() or None
+    return connect(engine, port, database=db_name)
+
+
 def test_connection(
     port: int,
     engine: str = "mysql",

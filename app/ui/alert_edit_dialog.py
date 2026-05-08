@@ -48,6 +48,7 @@ class AlertEditDialog(tk.Toplevel):
         except ValueError:
             self._template.current(0)
         self._template.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
+        self._template.bind("<<ComboboxSelected>>", lambda _e: self._on_template_change())
 
         ttk.Label(body, text="Триггер").grid(row=2, column=0, sticky="w", pady=5)
         mode_frame = ttk.Frame(body)
@@ -151,7 +152,38 @@ class AlertEditDialog(tk.Toplevel):
             variable=self._wh_var,
         ).grid(row=8, column=1, sticky="w", pady=(2, 0), padx=(10, 0))
 
+        # AI-audit-specific fields (only visible when template == ai_audit)
+        self._ai_label = ttk.Label(
+            body, text="AI-аудит", foreground="#6b7280",
+            font=("Segoe UI", 9, "bold"),
+        )
+        self._ai_label.grid(row=9, column=0, sticky="w", pady=(12, 4))
+        self._ai_frame = ttk.Frame(body)
+        self._ai_frame.grid(row=9, column=1, sticky="ew", pady=(12, 4), padx=(10, 0))
+
+        ttk.Label(self._ai_frame, text="Модель:").grid(row=0, column=0, sticky="w")
+        self._ai_model = tk.StringVar(value=self._alert.get("model_kind") or "sonnet")
+        ttk.Combobox(
+            self._ai_frame, textvariable=self._ai_model,
+            values=("sonnet", "opus"), state="readonly", width=10,
+        ).grid(row=0, column=1, sticky="w", padx=(4, 14))
+
+        ttk.Label(self._ai_frame, text="Чатов max:").grid(row=0, column=2, sticky="w")
+        self._ai_chat_limit = tk.IntVar(value=int(self._alert.get("chat_limit") or 500))
+        ttk.Spinbox(
+            self._ai_frame, from_=10, to=1000, increment=50,
+            textvariable=self._ai_chat_limit, width=6,
+        ).grid(row=0, column=3, sticky="w", padx=(4, 14))
+
+        ttk.Label(self._ai_frame, text="Период (дн):").grid(row=0, column=4, sticky="w")
+        self._ai_period = tk.IntVar(value=int(self._alert.get("period_days") or 1))
+        ttk.Spinbox(
+            self._ai_frame, from_=1, to=30, increment=1,
+            textvariable=self._ai_period, width=4,
+        ).grid(row=0, column=5, sticky="w", padx=(4, 0))
+
         self._on_mode_change()
+        self._on_template_change()
 
         btns = ttk.Frame(self, padding=(18, 0, 18, 18))
         btns.grid(row=1, column=0, sticky="ew")
@@ -178,6 +210,20 @@ class AlertEditDialog(tk.Toplevel):
         state = "normal" if self._st_use.get() else "disabled"
         self._st_hour_box.configure(state=state)
         self._st_min_box.configure(state=state)
+
+    def _current_template_slug(self) -> str:
+        idx = self._template.current()
+        if 0 <= idx < len(self._template_slugs):
+            return self._template_slugs[idx]
+        return ""
+
+    def _on_template_change(self) -> None:
+        if self._current_template_slug() == "ai_audit":
+            self._ai_label.grid()
+            self._ai_frame.grid()
+        else:
+            self._ai_label.grid_remove()
+            self._ai_frame.grid_remove()
 
     def _on_mode_change(self) -> None:
         if self._mode_var.get() == "time":
@@ -226,6 +272,20 @@ class AlertEditDialog(tk.Toplevel):
             "enabled": bool(self._enabled_var.get()),
             "working_hours_only": bool(self._wh_var.get()),
         }
+        if self._template_slugs[idx] == "ai_audit":
+            try:
+                cl = int(self._ai_chat_limit.get())
+                pd = int(self._ai_period.get())
+            except (TypeError, ValueError, tk.TclError):
+                messagebox.showerror(
+                    "Ошибка", "Чатов и период должны быть числами.", parent=self,
+                )
+                return
+            new_alert.update({
+                "model_kind": (self._ai_model.get() or "sonnet").strip(),
+                "chat_limit": max(1, cl),
+                "period_days": max(1, pd),
+            })
         try:
             saved = upsert_bot_alert(self._company.key, self._kind, new_alert)
         except OSError as exc:

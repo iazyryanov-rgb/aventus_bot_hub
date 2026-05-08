@@ -26,27 +26,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Callable, Iterable, Optional
 
-from .crm_lookup import _open_for
-from .data import Company, load_raw
+from .data import Company
+from .db import connect_for_company
 
-QueryFn = Callable[[int, list[date], str], dict[str, dict]]
-
-
-def _connect(port: int):
-    """Legacy MySQL connect by port (kept for backward compat with
-    _co_credito365_payments). New code should call `_open_for(company)`."""
-    import pymysql
-
-    from .db import load_db_config
-
-    cfg = load_db_config()
-    return pymysql.connect(
-        host=cfg.get("host", "localhost"),
-        port=int(port),
-        user=cfg.get("user", "viewer"),
-        password=cfg.get("password", "") or "",
-        connect_timeout=int(cfg.get("connect_timeout", 5) or 5),
-    )
+QueryFn = Callable[[Company, list[date]], dict[str, dict]]
 
 
 def _chunks(lst: list, size: int) -> Iterable[list]:
@@ -70,7 +53,7 @@ def _empty_bucket() -> dict:
 # ---------- per-company implementations ----------
 
 def _co_credito365_payments(
-    port: int, days: list[date], tz_name: str
+    company: Company, days: list[date]
 ) -> dict[str, dict]:
     """CO Credito365: prod_credito365_api.
 
@@ -85,7 +68,7 @@ def _co_credito365_payments(
     start = datetime.combine(days[0], datetime.min.time())
     end = datetime.combine(days[-1], datetime.max.time())
 
-    conn = _connect(port)
+    conn = connect_for_company(company)
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -165,15 +148,7 @@ def fetch_payments_per_day(
     fn = PAYMENTS_QUERIES.get(company.key)
     if not fn:
         return None
-    info = load_raw().get(company.key, {})
-    port_str = str(info.get("crm_db_port") or "").strip()
-    if not port_str:
-        return None
     try:
-        port = int(port_str)
-    except ValueError:
-        return None
-    try:
-        return fn(port, days, company.timezone)
+        return fn(company, days)
     except Exception:
         return None

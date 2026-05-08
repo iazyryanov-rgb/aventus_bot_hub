@@ -1,6 +1,164 @@
 {
     "telegram": {
         "bot_token": "8051942313:AAFyj5poYItKlp0idbCQxw2OdE6WTWMDutw",
-        "chat_id": "-1002627199331"
+        "chat_id": "-1002627199331",
+        "topics": {
+            "AR_": 159293,
+            "PE_": 159294,
+            "CO_": 159295,
+            "CO2_": 159297
+        }
+    },
+    "bot_alerts": {
+        "AR_": {
+            "agents": [
+                {
+                    "name": "Agents on break > online",
+                    "template": "agents_on_break",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: алерт, если в любой Collection × {Main, APTP, BPTP} очереди на перерыве больше людей, чем онлайн.",
+                    "id": "21148a35cde2a42b"
+                },
+                {
+                    "name": "Agents chats unanswered > 15min",
+                    "template": "agents_chats_unanswered",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
+                    "id": "6cfdfe6db0202a8c"
+                }
+            ],
+            "voice": [
+                {
+                    "name": "Коллист · ошибка отправки",
+                    "template": "crm_call_list_failed",
+                    "schedule": "Каждые 5 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": false,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Поллит CRM Lendi (public.dialer_process) — алерт по новым строкам со state='error'. Throttle через high-water mark по updated_at: каждый сбой репортится один раз. На первом запуске выставляет water-mark = max(updated_at) и не алертит исторические ошибки.",
+                    "id": "b4ff49879fb52366"
+                }
+            ]
+        },
+        "CO_": {
+            "agents": [
+                {
+                    "name": "Agents on break > online",
+                    "template": "agents_on_break",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: алерт, если в любой Collection × {Main, APTP, BPTP} очереди на перерыве больше людей, чем онлайн.",
+                    "id": "3529b6025409dda2"
+                },
+                {
+                    "name": "Agents chats unanswered > 15min",
+                    "template": "agents_chats_unanswered",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
+                    "id": "c0695c1a16f4143c"
+                }
+            ],
+            "whatsapp": [
+                {
+                    "name": "AI audit · WhatsApp · daily",
+                    "template": "ai_audit",
+                    "schedule": "Раз в сутки",
+                    "trigger_mode": "time",
+                    "working_hours_only": false,
+                    "start_time": "06:00",
+                    "enabled": true,
+                    "model_kind": "sonnet",
+                    "chat_limit": 500,
+                    "period_days": 1,
+                    "notes": "Daily AI-аудит чатов; результат → Telegram. Сразу после — calibration cycle на candidate (id=126).",
+                    "id": "bf149e5620434d52"
+                },
+                {
+                    "name": "Weekly review · Champion vs Candidate",
+                    "template": "weekly_review",
+                    "schedule": "Раз в сутки",
+                    "trigger_mode": "time",
+                    "working_hours_only": false,
+                    "start_time": "09:00",
+                    "enabled": true,
+                    "weekday": 0,
+                    "days": 7,
+                    "target_goal": "fully_pay",
+                    "min_lift_pct": 2.0,
+                    "min_n": 50,
+                    "chat_limit": 5000,
+                    "notes": "Каждый понедельник в 09:00: champion vs candidate cohort metrics + promote/keep decision.",
+                    "id": "137bd1b1552e2e96"
+                }
+            ]
+        },
+        "CO2_": {
+            "agents": [
+                {
+                    "name": "Agents on break > online",
+                    "template": "agents_on_break",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: алерт, если в любой Collection × {Main, APTP, BPTP} очереди на перерыве больше людей, чем онлайн.",
+                    "id": "8e3c410d13fd1278"
+                },
+                {
+                    "name": "Agents chats unanswered > 15min",
+                    "template": "agents_chats_unanswered",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
+                    "id": "e97cf300c645f88c"
+                }
+            ]
+        },
+        "PE_": {
+            "agents": [
+                {
+                    "name": "Agents on break > online",
+                    "template": "agents_on_break",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: алерт, если в любой Collection × {Main, APTP, BPTP} очереди на перерыве больше людей, чем онлайн.",
+                    "id": "ee971004ad135e2a"
+                },
+                {
+                    "name": "Agents chats unanswered > 15min",
+                    "template": "agents_chats_unanswered",
+                    "schedule": "Каждые 15 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": true,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
+                    "id": "60f24aed731cf22d"
+                }
+            ]
+        }
     }
 }

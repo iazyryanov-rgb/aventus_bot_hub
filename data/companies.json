@@ -1,84 +1,104 @@
 {
-    "AR_": {
-        "name": "Lendi",
-        "country": "Argentina",
-        "timezone": "America/Argentina/Buenos_Aires",
-        "webitel_host": "https://aventus-ar.webitel.com",
-        "webitel_access_token": "s366p8switn3xj8h4gginssady",
-        "schema_id": 54,
-        "schema_name": "whatsapp-infobip-lendi-prod",
-        "bots": {
-            "whatsapp": {
-                "prod_schema_id": 54,
-                "prod_schema_name": "whatsapp-infobip-lendi-prod"
-            }
-        },
-        "crm_host": "https://api.lendi.ar/api/webhook/webitel/{phone}/status",
-        "crm_access_token": "Basic d2ViaXRlbDp3ZWJpdGVsLWFyZw==",
-        "crm_token_header": "Authorization",
-        "crm_db_engine": "postgres",
-        "crm_db_name": "prod_ar_lendi",
-        "crm_db_port": "55609"
+  "AR_": {
+    "name": "Lendi",
+    "country": "Argentina",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "webitel_host": "https://aventus-ar.webitel.com",
+    "webitel_access_token": "s366p8switn3xj8h4gginssady",
+    "schema_id": 54,
+    "schema_name": "whatsapp-infobip-lendi-prod",
+    "bots": {
+      "whatsapp": {
+        "prod_schema_id": 54,
+        "prod_schema_name": "whatsapp-infobip-lendi-prod"
+      }
     },
-    "CO_": {
-        "name": "Credito365",
-        "country": "Colombia",
-        "timezone": "America/Bogota",
-        "webitel_host": "https://aventus.us-east.webitel.com",
-        "webitel_access_token": "mmd3tbfpcfd9zqmfxic5epo11c",
-        "schema_id": 110,
-        "schema_name": "whatsapp-infobip-credito365-prod",
-        "bots": {
-            "whatsapp": {
-                "prod_schema_id": 110,
-                "prod_schema_name": "whatsapp-infobip-credito365-prod"
-            }
-        },
-        "crm_host": "https://api.credito365.co/api/partner/webitel/client-info?phone={phone}",
-        "crm_access_token": "MWI0ZGNiYWIyY2M3M2VlMzI5NjZmMmRhYTViYzhlNjE=",
-        "crm_db_engine": "mysql",
-        "crm_db_port": "55610",
-        "crm_token_header": "PARTNER-API-KEY"
-    },
-    "PE_": {
-        "name": "Prestamo365",
-        "country": "Peru",
-        "timezone": "America/Lima",
-        "webitel_host": "https://aventus.sa-east-1.webitel.com",
-        "webitel_access_token": "ubxygcr6j7fepxtr3e6jo1xrga",
-        "schema_id": 80,
-        "schema_name": "whatsapp-infobip-prestamo365-prod",
-        "bots": {
-            "whatsapp": {
-                "prod_schema_id": 80,
-                "prod_schema_name": "whatsapp-infobip-prestamo365-prod"
-            }
-        },
-        "crm_host": "https://api.prestamo365.pe/api/hooks/webitel/webitel-search-client-by-phone/{phone}",
-        "crm_access_token": "4323f240-c69f-45ec-8748-fb503aa65a4b",
-        "crm_token_header": "Webitel-Header",
-        "crm_db_engine": "postgres",
-        "crm_db_name": "prod-prestamo365-pe",
-        "crm_db_port": "55613"
-    },
-    "CO2_": {
-        "name": "TuParcero",
-        "country": "Colombia",
-        "timezone": "America/Bogota",
-        "webitel_host": "https://aventus.us-east.webitel.com",
-        "webitel_access_token": "di3tdiznk3bbmgypxz9hjaj1er",
-        "schema_id": 124,
-        "schema_name": "whatsapp-infobip-tuparcero-prod",
-        "bots": {
-            "whatsapp": {
-                "prod_schema_id": 124,
-                "prod_schema_name": "whatsapp-infobip-tuparcero-prod"
-            }
-        },
-        "crm_db_engine": "mysql",
-        "crm_host": "https://api.tuparcero.co/api/partner/webitel/client-info?phone={phone}",
-        "crm_access_token": "FFFFMjIjYzc0ZmI1NTNjNjM2I2ZDQwYTc0MjgxCCCC",
-        "crm_token_header": "PARTNER-API-KEY",
-        "crm_db_port": "55611"
+    "crm_host": "https://api.lendi.ar/api/webhook/webitel/{phone}/status",
+    "crm_access_token": "Basic d2ViaXRlbDp3ZWJpdGVsLWFyZw==",
+    "crm_token_header": "Authorization",
+    "crm_db_engine": "postgres",
+    "crm_db_name": "prod_ar_lendi",
+    "crm_db_port": "55609",
+    "grafana": {
+      "base_url": "https://aventus-ar.webitel.com/grafana",
+      "user": "supervisor",
+      "password": "k@luMnKzDEaQSJRua$uvCt3PM0"
     }
+  },
+  "CO_": {
+    "name": "Credito365",
+    "country": "Colombia",
+    "timezone": "America/Bogota",
+    "webitel_host": "https://aventus.us-east.webitel.com",
+    "webitel_access_token": "mmd3tbfpcfd9zqmfxic5epo11c",
+    "schema_id": 110,
+    "schema_name": "whatsapp-infobip-credito365-prod",
+    "bots": {
+      "whatsapp": {
+        "prod_schema_id": 110,
+        "prod_schema_name": "whatsapp-infobip-credito365-prod",
+        "candidate_schema_id": 126,
+        "candidate_schema_name": "whatsapp-infobip-credito365-candidate",
+        "router_schema_id": 127,
+        "router_schema_name": "whatsapp-infobip-credito365-router",
+        "bot_phone_number": "+57 315 1586256"
+      }
+    },
+    "crm_host": "https://api.credito365.co/api/partner/webitel/client-info?phone={phone}",
+    "crm_access_token": "MWI0ZGNiYWIyY2M3M2VlMzI5NjZmMmRhYTViYzhlNjE=",
+    "crm_db_engine": "mysql",
+    "crm_db_port": "55610",
+    "crm_token_header": "PARTNER-API-KEY",
+    "grafana": {
+      "base_url": "https://aventus.us-east.webitel.com/grafana",
+      "user": "supervisor@grafana.aventus.us-east",
+      "password": "columbia-4D4iF52Cuc"
+    }
+  },
+  "PE_": {
+    "name": "Prestamo365",
+    "country": "Peru",
+    "timezone": "America/Lima",
+    "webitel_host": "https://aventus.sa-east-1.webitel.com",
+    "webitel_access_token": "ubxygcr6j7fepxtr3e6jo1xrga",
+    "schema_id": 80,
+    "schema_name": "whatsapp-infobip-prestamo365-prod",
+    "bots": {
+      "whatsapp": {
+        "prod_schema_id": 80,
+        "prod_schema_name": "whatsapp-infobip-prestamo365-prod"
+      }
+    },
+    "crm_host": "https://api.prestamo365.pe/api/hooks/webitel/webitel-search-client-by-phone/{phone}",
+    "crm_access_token": "4323f240-c69f-45ec-8748-fb503aa65a4b",
+    "crm_token_header": "Webitel-Header",
+    "crm_db_engine": "postgres",
+    "crm_db_name": "prod-prestamo365-pe",
+    "crm_db_port": "55613",
+    "grafana": {
+      "base_url": "https://aventus.sa-east-1.webitel.com/grafana",
+      "user": "supervisor@grafana.webitel.prestamo365.pe",
+      "password": "Straddle-Tucking-Herbal-Omen4-Joining-Primp"
+    }
+  },
+  "CO2_": {
+    "name": "TuParcero",
+    "country": "Colombia",
+    "timezone": "America/Bogota",
+    "webitel_host": "https://aventus.us-east.webitel.com",
+    "webitel_access_token": "di3tdiznk3bbmgypxz9hjaj1er",
+    "schema_id": 124,
+    "schema_name": "whatsapp-infobip-tuparcero-prod",
+    "bots": {
+      "whatsapp": {
+        "prod_schema_id": 124,
+        "prod_schema_name": "whatsapp-infobip-tuparcero-prod"
+      }
+    },
+    "crm_db_engine": "mysql",
+    "crm_host": "https://api.tuparcero.co/api/partner/webitel/client-info?phone={phone}",
+    "crm_access_token": "FFFFMjIjYzc0ZmI1NTNjNjM2I2ZDQwYTc0MjgxCCCC",
+    "crm_token_header": "PARTNER-API-KEY",
+    "crm_db_port": "55611"
+  }
 }

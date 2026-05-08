@@ -1,9 +1,17 @@
 data/conversations_cache/
 data/dashboard_cache/
 data/crm_data_cache/
+data/webitel_schema_snapshots/
+data/webitel_schemas/
 data/db_catalogs/CO_credito365_schema.json
 data/db_catalogs/PE_prestamo365_schema.json
 data/db_catalogs/AR_lendi_schema.json
+data/api_keys.json
+data/audit_history/
+data/audit_pending/
+data/calibration_cycle/
+.tmp_schemas/
+all_nodes.txt
 .claude/
 __pycache__/
 *.pyc

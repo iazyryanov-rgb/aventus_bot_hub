@@ -128,6 +128,42 @@ class CompanyEditDialog(tk.Toplevel):
         self._timezone.set(current_tz)
         self._timezone.grid(row=tz_row, column=1, sticky="ew", pady=5, padx=(10, 0))
 
+        # --- Grafana (per-company, used to query Webitel Postgres for
+        # full chat coverage incl. bot-only). All optional — if absent,
+        # the chats panel falls back to REST.
+        grafana_info = info.get("grafana") or {}
+        gf_section_row = tz_row + 1
+        ttk.Label(
+            body, text="Grafana (опционально)",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#6b7280",
+        ).grid(row=gf_section_row, column=0, columnspan=2,
+               sticky="w", pady=(12, 4))
+        gf_specs = [
+            ("grafana_base_url", "Grafana host (URL)", False),
+            ("grafana_user",     "Grafana login",      False),
+            ("grafana_password", "Grafana password",   True),
+        ]
+        self._grafana_entries: dict[str, ttk.Entry] = {}
+        for i, (field, label, is_password) in enumerate(gf_specs, start=1):
+            ttk.Label(body, text=label).grid(
+                row=gf_section_row + i, column=0, sticky="w", pady=5,
+            )
+            kw = {"width": 44}
+            if is_password:
+                kw["show"] = "•"
+            e = ttk.Entry(body, **kw)
+            # Map dialog-field names → JSON keys.
+            json_key = {
+                "grafana_base_url": "base_url",
+                "grafana_user":     "user",
+                "grafana_password": "password",
+            }[field]
+            e.insert(0, str(grafana_info.get(json_key, "") or ""))
+            e.grid(row=gf_section_row + i, column=1, sticky="ew",
+                   pady=5, padx=(10, 0))
+            self._grafana_entries[field] = e
+
         body.columnconfigure(1, weight=1)
 
         btns = ttk.Frame(self, padding=(18, 0, 18, 18))
@@ -295,6 +331,21 @@ class CompanyEditDialog(tk.Toplevel):
             new_info.get("country", "")
         )
         new_info["crm_db_engine"] = (self._engine_var.get() or "mysql").lower()
+
+        # Grafana block — stored as nested dict so the rest of
+        # companies.json stays flat. Stripped of empty fields so the
+        # config file isn't littered with empty optional sections.
+        gf_url = self._grafana_entries["grafana_base_url"].get().strip()
+        gf_user = self._grafana_entries["grafana_user"].get().strip()
+        gf_pass = self._grafana_entries["grafana_password"].get().strip()
+        if gf_url or gf_user or gf_pass:
+            new_info["grafana"] = {
+                "base_url": gf_url,
+                "user":     gf_user,
+                "password": gf_pass,
+            }
+        else:
+            new_info.pop("grafana", None)
 
         if self._is_new:
             missing = []

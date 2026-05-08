@@ -10,18 +10,7 @@ import urllib.request
 from typing import Callable, Optional
 
 from .data import Company, load_raw
-from .db import connect
-
-
-def _open_for(company: Company):
-    info = load_raw().get(company.key, {})
-    engine = (info.get("crm_db_engine") or "mysql").lower()
-    port_str = str(info.get("crm_db_port") or "").strip()
-    if not port_str:
-        raise ValueError("crm_db_port не задан")
-    port = int(port_str)
-    db_name = str(info.get("crm_db_name") or "").strip() or None
-    return connect(engine, port, database=db_name)
+from .db import connect_for_company as _open_for
 
 
 # ---------- per-company "find active loan phone" ----------
@@ -56,6 +45,38 @@ def _co_credito365_active_phone(company: Company) -> Optional[str]:
 
 def _co2_tuparcero_active_phone(company: Company) -> Optional[str]:
     return _mysql_active_phone(company, "prod_tuparcero_api")
+
+
+def _mysql_active_phone_dpd(company: Company, db_name: str, min_dpd: int) -> Optional[str]:
+    conn = _open_for(company)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT u.main_phone_number "
+                f"FROM `{db_name}`.loan l "
+                f"JOIN `{db_name}`.user u ON l.userId = u.id "
+                f"WHERE l.returnedDate IS NULL "
+                f"  AND l.daysLate >= %s "
+                f"  AND u.main_phone_number IS NOT NULL "
+                f"  AND u.main_phone_number != '' "
+                f"ORDER BY l.daysLate DESC, l.id DESC LIMIT 1",
+                (min_dpd,),
+            )
+            row = cur.fetchone()
+            return str(row[0]) if row else None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _co_credito365_active_phone_dpd90(company: Company) -> Optional[str]:
+    return _mysql_active_phone_dpd(company, "prod_credito365_api", 90)
+
+
+def _co2_tuparcero_active_phone_dpd90(company: Company) -> Optional[str]:
+    return _mysql_active_phone_dpd(company, "prod_tuparcero_api", 90)
 
 
 def _pg_active_phone(company: Company, country_prefix: str) -> Optional[str]:
@@ -110,6 +131,41 @@ ACTIVE_PHONE_QUERIES: dict[str, Callable[[Company], Optional[str]]] = {
     "CO2_": _co2_tuparcero_active_phone,
     "PE_": _pe_prestamo365_active_phone,
 }
+
+
+ACTIVE_PHONE_DPD90_QUERIES: dict[str, Callable[[Company], Optional[str]]] = {
+    "CO_": _co_credito365_active_phone_dpd90,
+    "CO2_": _co2_tuparcero_active_phone_dpd90,
+}
+
+
+def fetch_active_loan_phone_dpd90(
+    company: Company,
+) -> tuple[Optional[str], Optional[str]]:
+    fn = ACTIVE_PHONE_DPD90_QUERIES.get(company.key)
+    if not fn:
+        return None, (
+            f"DB-запрос (90+ DPD) не настроен для {company.key.rstrip('_')}"
+        )
+    info = load_raw().get(company.key, {})
+    port_str = str(info.get("crm_db_port") or "").strip()
+    if not port_str:
+        return None, "В компании не задан CRM DB port"
+    try:
+        int(port_str)
+    except ValueError:
+        return None, f"CRM DB port должен быть числом ({port_str!r})"
+    if (info.get("crm_db_engine") or "mysql").lower() == "postgres" and not (
+        info.get("crm_db_name") or ""
+    ):
+        return None, "Для Postgres нужно указать crm_db_name"
+    try:
+        phone = fn(company)
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if not phone:
+        return None, "Активный займ с 90+ DPD не найден"
+    return phone, None
 
 
 def fetch_active_loan_phone(company: Company) -> tuple[Optional[str], Optional[str]]:

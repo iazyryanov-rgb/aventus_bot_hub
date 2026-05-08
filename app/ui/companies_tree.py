@@ -160,7 +160,7 @@ class Row(tk.Frame):
             self._bg_widgets.append(spacer)
 
         self.checkbox = Checkbox(
-            self, checked=False, command=self._on_checkbox_change
+            self, checked=True, command=self._on_checkbox_change
         )
         self.checkbox.pack(side="left", padx=(10, 10), pady=5)
 
@@ -240,9 +240,11 @@ class CompaniesTree(ttk.Frame):
         self,
         master: tk.Misc,
         on_open_panel: Optional[Callable[[Callable[[tk.Misc], tk.Widget]], None]] = None,
+        on_company_check: Optional[Callable[[str, bool], None]] = None,
     ) -> None:
         super().__init__(master)
         self._on_open_panel = on_open_panel
+        self._on_company_check = on_company_check
         self.configure(style="Companies.TFrame")
 
         style = ttk.Style(self)
@@ -267,23 +269,28 @@ class CompaniesTree(ttk.Frame):
         self._bot_errors: dict[tuple[str, str], bool] = {}
         self._populate()
 
-        actions = ttk.Frame(self)
-        actions.pack(fill="x", padx=8, pady=(0, 12))
+        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=14)
+
+        actions = ttk.Frame(self, style="Companies.TFrame")
+        actions.pack(fill="x", padx=14, pady=(10, 14))
         self._add_btn = ttk.Button(
-            actions, text=t("btn_add_company"), command=self._open_add_company
+            actions,
+            text=t("btn_add_company"),
+            command=self._open_add_company,
+            style="Accent.TButton",
         )
-        self._add_btn.pack(side="left", padx=(6, 8))
+        self._add_btn.pack(side="left")
         self._analytics_btn = ttk.Button(
             actions,
             text=t("btn_analytics"),
             command=self._open_analytics,
             state="disabled",
         )
-        self._analytics_btn.pack(side="left")
+        self._analytics_btn.pack(side="left", padx=(8, 0))
         self._sync_btn = ttk.Button(
             actions, text=t("btn_sync_webitel"), command=self._sync_webitel
         )
-        self._sync_btn.pack(side="left", padx=(8, 0))
+        self._sync_btn.pack(side="right")
 
         self._tick()
 
@@ -310,7 +317,7 @@ class CompaniesTree(ttk.Frame):
                 label=self._co_label(c),
                 on_menu=lambda e, key=c.key: self._show_company_menu(e, key),
                 on_click=lambda key=c.key: self._open_dashboard(key),
-                on_check=lambda _v: self._refresh_analytics(),
+                on_check=lambda v, key=c.key: self._handle_company_check(key, v),
             )
             co_row.pack(fill="x")
             co_row.set_status("warn" if not is_company_complete(c.key) else None)
@@ -368,12 +375,23 @@ class CompaniesTree(ttk.Frame):
         finally:
             menu.grab_release()
 
+    def _handle_company_check(self, company_key: str, checked: bool) -> None:
+        self._refresh_analytics()
+        if self._on_company_check:
+            try:
+                self._on_company_check(company_key, checked)
+            except Exception:
+                pass
+
+    def checked_company_keys(self) -> list[str]:
+        return [k for k, row in self._co_rows.items() if row.is_checked()]
+
     def _open_dashboard(self, company_key: str) -> None:
         company = next((c for c in self._companies if c.key == company_key), None)
         if not company or not self._on_open_panel:
             return
-        from .dashboard_panel import DashboardPanel
-        self._on_open_panel(lambda parent: DashboardPanel(parent, company))
+        from .company_panel import CompanyPanel
+        self._on_open_panel(lambda parent: CompanyPanel(parent, company))
 
     def _open_add_company(self) -> None:
         from .company_edit_dialog import CompanyEditDialog

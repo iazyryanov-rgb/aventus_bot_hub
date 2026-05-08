@@ -4,6 +4,8 @@ from tkinter import ttk
 from typing import Optional
 
 from ..action_trees import (
+    BOT_KINDS,
+    compute_readiness,
     get_configured_text,
     get_format_choice,
     get_tree,
@@ -15,10 +17,8 @@ from ..action_trees import (
 from ..crm_field_types import all_known_types
 from ..crm_results import get_body_schema
 from ..data import Company
-
-META_FG = "#6b7280"
-TBD_FG = "#9ca3af"
-TEXT_FG = "#111827"
+from ..i18n import t
+from .colors import META_FG, TBD_FG, TEXT_FG
 
 
 class ActionTreePanel(ttk.Frame):
@@ -35,7 +35,7 @@ class ActionTreePanel(ttk.Frame):
 
         ttk.Label(
             self,
-            text="ДЕРЕВО ДЕЙСТВИЙ",
+            text=t("tree_header"),
             font=("Segoe UI", 9, "bold"),
             foreground=META_FG,
         ).pack(anchor="w", padx=14, pady=(14, 6))
@@ -48,7 +48,10 @@ class ActionTreePanel(ttk.Frame):
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
         schema = get_body_schema(company.key) or []
-        if schema:
+        tree_def_for_check = get_tree(company.key) or {}
+        if schema and tree_def_for_check:
+            self._render_readiness(company.key, schema, tree_def_for_check)
+        elif schema:
             names = [f.get("name", "") for f in schema if f.get("name")]
             ttk.Label(
                 self,
@@ -93,6 +96,66 @@ class ActionTreePanel(ttk.Frame):
 
         self._tree_def = tree_def
         self._render_tree(tree_def)
+
+    # ---------- readiness checklist ----------
+
+    def _render_readiness(
+        self, company_key: str, schema: list[dict], tree_def: dict
+    ) -> None:
+        names = [f.get("name", "") for f in schema if f.get("name")]
+        status = compute_readiness(company_key, tree_def, names)
+
+        wrap = ttk.Frame(self)
+        wrap.pack(anchor="w", fill="x", padx=14, pady=(0, 10))
+        ttk.Label(
+            wrap,
+            text=f"Готовность переменных результата ({len(names)})",
+            foreground=META_FG,
+        ).pack(anchor="w", pady=(0, 4))
+
+        grid = ttk.Frame(wrap)
+        grid.pack(anchor="w")
+
+        kinds = list(BOT_KINDS.keys())
+        # header
+        ttk.Label(grid, text=t("tree_col_var"), foreground=META_FG, width=18).grid(
+            row=0, column=0, sticky="w", padx=(0, 18)
+        )
+        for col, kind in enumerate(kinds, start=1):
+            ttk.Label(
+                grid, text=BOT_KINDS[kind], foreground=META_FG, width=22
+            ).grid(row=0, column=col, sticky="w", padx=(0, 18))
+
+        glyphs = {
+            "ok": ("✓", "#16a34a"),
+            "missing": ("✗", "#dc2626"),
+            "no_tree": ("—", TBD_FG),
+        }
+
+        for r, name in enumerate(names, start=1):
+            ttk.Label(grid, text=name).grid(
+                row=r, column=0, sticky="w", padx=(0, 18)
+            )
+            per = status.get(name) or {}
+            for col, kind in enumerate(kinds, start=1):
+                glyph, color = glyphs.get(per.get(kind, "no_tree"))
+                ttk.Label(grid, text=glyph, foreground=color).grid(
+                    row=r, column=col, sticky="w", padx=(0, 18)
+                )
+
+        # Test buttons row — one per bot kind.
+        btn_row = ttk.Frame(wrap)
+        btn_row.pack(anchor="w", pady=(8, 0))
+        for kind, kind_label in BOT_KINDS.items():
+            ttk.Button(
+                btn_row,
+                text=f"🧪 Тест {kind_label}",
+                command=lambda k=kind, kl=kind_label: self._run_test(k, kl),
+            ).pack(side="left", padx=(0, 8))
+
+    def _run_test(self, bot_kind: str, bot_kind_label: str) -> None:
+        from .action_tree_test_dialog import ActionTreeTestDialog
+        ActionTreeTestDialog(self, self._company, bot_kind, bot_kind_label)
 
     # ---------- render ----------
 

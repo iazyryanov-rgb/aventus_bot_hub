@@ -27,6 +27,7 @@ USER_DATA_FILES = (
     "settings.json",
     "crm_field_types_overrides.json",
     "action_tree_overrides.json",
+    "api_keys.json",
 )
 
 
@@ -107,6 +108,23 @@ def run_pyinstaller() -> None:
         f"app-icon.png{sep}.",
         "--add-data",
         f"app-icon.ico{sep}.",
+        "--collect-all",
+        "tzdata",
+        "--collect-all",
+        "anthropic",
+        "--hidden-import",
+        "pymysql",
+        "--hidden-import",
+        "pg8000",
+        "--hidden-import",
+        "pg8000.dbapi",
+        # Tray icon — pystray + Pillow. pystray picks the right backend at
+        # runtime (Win32 here); --collect-all keeps that auto-detection
+        # working inside PyInstaller's frozen environment.
+        "--collect-all",
+        "pystray",
+        "--collect-all",
+        "PIL",
         "run.py",
     ]
     subprocess.check_call(cmd, cwd=ROOT)
@@ -122,8 +140,12 @@ def stage_runtime() -> None:
     #   - never delete anything else in dist (preserves runtime caches like
     #     conversations_cache/, db files, etc.)
     #   - if a file is in USER_DATA_FILES and already exists in dist, keep dist version
+    # Dirs/files that are dev-only references and shouldn't end up in dist.
+    SKIP_TOPLEVEL = {"db_catalogs", "webitel_schema_snapshots", "webitel_schemas"}
     for entry in sorted(src_data.rglob("*")):
         rel = entry.relative_to(src_data)
+        if rel.parts and rel.parts[0] in SKIP_TOPLEVEL:
+            continue
         rel_str = "/".join(rel.parts)
         target = dst_data / rel
         if entry.is_dir():

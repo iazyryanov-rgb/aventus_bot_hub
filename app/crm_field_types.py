@@ -262,6 +262,33 @@ def get_field_type(company_key: str, field_path: str) -> str:
     return _lookup(static, path)
 
 
+def lookup_value_by_type(company_key: str, payload, slug: str):
+    """Walk the CRM payload (any nesting) and return the first value whose
+    field path maps to the given internal `slug` (e.g. "loan.id"). Returns
+    None if not found."""
+    if not slug:
+        return None
+
+    def walk(obj, prefix: str = ""):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                key = f"{prefix}.{k}" if prefix else str(k)
+                if isinstance(v, (dict, list)):
+                    r = walk(v, key)
+                    if r is not None:
+                        return r
+                elif get_field_type(company_key, key) == slug:
+                    return v
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                r = walk(v, f"{prefix}[{i}]")
+                if r is not None:
+                    return r
+        return None
+
+    return walk(payload)
+
+
 def all_known_types() -> list[str]:
     """All currently-defined internal type slugs (static + overrides +
     extras), sorted alphabetically. Used to populate the editor combobox."""

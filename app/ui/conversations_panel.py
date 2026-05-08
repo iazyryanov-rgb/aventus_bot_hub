@@ -18,6 +18,7 @@ from ..webitel import (
     WebitelClient,
     WebitelError,
 )
+from .. import grafana_pg
 
 PERIODS: list[tuple[str, str]] = [
     ("Сегодня", "today"),
@@ -40,6 +41,15 @@ class ConversationsPanel(ttk.Frame):
         self._all_dialogs: list[ChatDialog] = []
         self._members: dict[str, list[ChatPeer]] = {}
         self._collection_user_ids: set[str] = set()
+        # Grafana-mode side-channels — populated when we pull dialogs from
+        # Postgres (full coverage incl. bot-only). Members aren't fetched
+        # in bulk in that mode (1500+ chats × 1 REST call = too slow);
+        # classifier uses these to label rows without per-chat fetch.
+        self._grafana_agent_by_chat: dict[str, str] = {}
+        self._grafana_agent_id_by_chat: dict[str, int] = {}
+        self._grafana_status_by_chat: dict[str, str] = {}  # bot|agent|queued_unanswered
+        self._collection_agent_ids: set[int] = set()
+        self._data_source: str = "rest"  # set to "grafana" when load succeeds
         self._sel_id: Optional[str] = None
         self._cache: dict = load_cache(company.key)
 
@@ -85,6 +95,18 @@ class ConversationsPanel(ttk.Frame):
             variable=self._collection_var,
             command=self._apply_filters,
         ).pack(side="left", padx=(0, 14))
+        # Bot / agent type filter — operator wants quick split.
+        ttk.Label(filters, text="Тип:").pack(side="left")
+        self._kind_var = tk.StringVar(value="Все")
+        kind_box = ttk.Combobox(
+            filters,
+            textvariable=self._kind_var,
+            values=["Все", "🤖 Бот", "👤 Агент", "❓ Неизвестно"],
+            state="readonly",
+            width=14,
+        )
+        kind_box.pack(side="left", padx=(4, 14))
+        kind_box.bind("<<ComboboxSelected>>", lambda _e: self._apply_filters())
         self._reload_btn = ttk.Button(filters, text="Обновить", command=self._reload)
         self._reload_btn.pack(side="left")
         self._status = ttk.Label(filters, text="", foreground=META_FG)
@@ -214,20 +236,171 @@ class ConversationsPanel(ttk.Frame):
             target=self._reload_worker, args=(since, until, q), daemon=True
         ).start()
 
+    # ---------- Grafana data path -----------------------------------
+
+    # Overlap when delta-fetching: re-pull the last N minutes so we
+    # catch chats that were "in flight" during the previous sync (their
+    # closed_at / agent_id / bridged status may have updated).
+    _GRAFANA_DELTA_OVERLAP_MS = 10 * 60 * 1000
+
+    def _grafana_dialogs(
+        self,
+        since_ms: int,
+        until_ms: int,
+        agent_name_by_id: dict[int, str],
+        phone_query: Optional[str],
+    ) -> list[ChatDialog]:
+        """Pull dialogs from Webitel's Postgres via Grafana with a
+        local incremental cache. Behaviour:
+
+          - Cached rows live in `self._cache["grafana_rows"]`
+            (chat_id → row dict).
+          - `self._cache["grafana_coverage"]` tracks the time window
+            the cache is known to cover.
+          - On each call we fetch ONLY the missing range from the
+            Postgres side (typically the tail since the last sync)
+            and merge into the cache. A 10-min overlap re-checks
+            recently-updated chats so agent-pickup / closed_at
+            transitions land in cache.
+          - Display = cache filtered to [since_ms, until_ms].
+        """
+        # Per-company filter — stored in companies.json.
+        wa_number = ""
+        try:
+            from ..wa_bot_config import load_raw as _wa_load_raw
+            wa_cfg = (
+                ((_wa_load_raw().get(self._company.key) or {})
+                 .get("bots") or {})
+                .get("whatsapp") or {}
+            )
+            wa_number = str(wa_cfg.get("bot_phone_number") or "").strip()
+        except Exception:
+            wa_number = ""
+
+        cache = self._cache
+        cached_rows: dict = cache.setdefault("grafana_rows", {})
+        coverage: dict = cache.setdefault("grafana_coverage", {})
+        cov_since = coverage.get("since_ms")
+        cov_until = coverage.get("until_ms")
+
+        # Decide what to actually fetch.
+        if cov_since is None or int(cov_since) > since_ms:
+            # Cache doesn't cover the older edge of the requested period
+            # — fetch the whole [since_ms, until_ms] block.
+            fetch_from = since_ms
+            fetch_to = until_ms
+        else:
+            # Cache covers the older edge already; just re-pull the tail
+            # with a small overlap so recently-mutated chats are refreshed.
+            fetch_from = max(
+                since_ms,
+                int(cov_until or since_ms) - self._GRAFANA_DELTA_OVERLAP_MS,
+            )
+            fetch_to = until_ms
+
+        new_rows: list[dict] = []
+        if fetch_to > fetch_from:
+            new_rows = grafana_pg.list_chat_conversations(
+                fetch_from, fetch_to,
+                company_key=self._company.key,
+                channel=None,
+                whatsapp_number=wa_number or None,
+                limit=5000,
+            )
+
+        # Merge new rows into cache. Last-write-wins by chat_id.
+        fresh_count = 0
+        updated_count = 0
+        for r in new_rows:
+            chat_id = str(r.get("id") or "")
+            if not chat_id:
+                continue
+            if chat_id in cached_rows:
+                updated_count += 1
+            else:
+                fresh_count += 1
+            cached_rows[chat_id] = r
+
+        # Update coverage window.
+        coverage["since_ms"] = (
+            min(int(cov_since or fetch_from), fetch_from)
+            if cov_since is not None else fetch_from
+        )
+        coverage["until_ms"] = max(int(cov_until or fetch_to), fetch_to)
+        cache["grafana_coverage"] = coverage
+        cache["grafana_rows"] = cached_rows
+        save_cache(self._company.key, cache)
+
+        # Reset side-channels — rebuilt from cache below.
+        self._grafana_agent_by_chat = {}
+        self._grafana_agent_id_by_chat = {}
+        self._grafana_status_by_chat = {}
+        self._grafana_fresh_count = fresh_count
+        self._grafana_reused_count = max(
+            0, len(cached_rows) - fresh_count - updated_count,
+        )
+        self._grafana_updated_count = updated_count
+
+        # Filter cached rows for display.
+        ph = (phone_query or "").strip().lower() or None
+        out: list[ChatDialog] = []
+        for chat_id, r in cached_rows.items():
+            try:
+                created_at = int(float(r.get("created_at_ms") or 0))
+            except (TypeError, ValueError):
+                created_at = 0
+            if not (since_ms <= created_at <= until_ms):
+                continue
+            from_phone = str(r.get("from_phone") or "")
+            peer_name = str(r.get("peer_name") or "")
+            if ph:
+                hay = f"{from_phone} {peer_name}".lower()
+                if ph not in hay:
+                    continue
+            queued = bool(r.get("queued"))
+            bridged = bool(r.get("bridged"))
+            agent_id_raw = r.get("agent_id")
+            try:
+                agent_id_int = int(agent_id_raw) if agent_id_raw is not None else None
+            except (TypeError, ValueError):
+                agent_id_int = None
+            if agent_id_int and bridged:
+                self._grafana_agent_by_chat[chat_id] = (
+                    agent_name_by_id.get(agent_id_int) or f"agent {agent_id_int}"
+                )
+                self._grafana_agent_id_by_chat[chat_id] = agent_id_int
+                self._grafana_status_by_chat[chat_id] = "agent"
+            elif queued:
+                self._grafana_status_by_chat[chat_id] = "queued_unanswered"
+            else:
+                self._grafana_status_by_chat[chat_id] = "bot"
+
+            try:
+                last = int(float(r.get("closed_at_ms") or 0)) or created_at
+            except (TypeError, ValueError):
+                last = created_at
+
+            out.append(ChatDialog(
+                id=chat_id,
+                title=peer_name or from_phone or chat_id[:8],
+                peer_name=peer_name,
+                peer_id=from_phone,
+                peer_type="user",
+                via_name=str(r.get("channel") or ""),
+                started_at_ms=created_at,
+                last_msg_at_ms=last,
+                last_msg_text="",
+            ))
+        out.sort(key=lambda d: -d.started_at_ms)
+        return out
+
     def _reload_worker(self, since: int, until: int, q: Optional[str]) -> None:
         client = WebitelClient(
             self._company.webitel_host, self._company.webitel_access_token
         )
-        try:
-            dialogs = client.list_dialogs(
-                date_since_ms=since, date_until_ms=until, q=q, size=200
-            )
-        except WebitelError as e:
-            if not self.winfo_exists():
-                return
-            self.after(0, lambda: self._on_load_error(str(e)))
-            return
 
+        # Resolve agents once — needed by both data sources for collection
+        # filtering and (in Grafana mode) for agent_id → name lookup.
         try:
             agents = client.list_agents()
         except WebitelError:
@@ -237,35 +410,74 @@ class ConversationsPanel(ttk.Frame):
             for a in agents
             if a.user_id and "collection" in (a.team_name or "").lower()
         }
+        agent_name_by_id: dict[int, str] = {a.id: a.name for a in agents if a.id}
+        collection_agent_ids = {
+            a.id for a in agents
+            if a.id and "collection" in (a.team_name or "").lower()
+        }
+
+        # Try Grafana (full coverage incl. bot-only). Fall back to REST
+        # on any error — Grafana might be down or creds missing.
+        dialogs: list[ChatDialog] = []
+        used_grafana = False
+        if grafana_pg.is_configured(self._company.key):
+            try:
+                dialogs = self._grafana_dialogs(
+                    since, until, agent_name_by_id, q,
+                )
+                used_grafana = True
+            except Exception as e:  # noqa: BLE001 — fall back gracefully
+                # Telegram-style error trace would be too noisy here;
+                # we just log and use REST.
+                print(f"[conversations] grafana fetch failed, fallback REST: {e}")
+
+        if not used_grafana:
+            try:
+                dialogs = client.list_dialogs(
+                    date_since_ms=since, date_until_ms=until, q=q, size=200
+                )
+            except WebitelError as e:
+                if not self.winfo_exists():
+                    return
+                self.after(0, lambda: self._on_load_error(str(e)))
+                return
+            self._grafana_agent_by_chat = {}
+            self._grafana_status_by_chat = {}
+            self._collection_agent_ids = set()
+            self._data_source = "rest"
+        else:
+            self._collection_agent_ids = collection_agent_ids
+            self._data_source = "grafana"
 
         cache = self._cache
         cached_dialogs = cache.setdefault("dialogs", {})
         cached_members = cache.setdefault("members", {})
         cached_messages = cache.setdefault("messages", {})
 
-        # Determine which dialogs need a (re)fetch of members:
-        #   - new dialog (not cached)
-        #   - updated dialog (last_msg_at_ms increased) → also drop messages cache
-        #   - cached dialog but no members snapshot
+        # Bulk member fetch — only in REST mode (~200 chats). In
+        # Grafana mode we have 1000+ chats; pre-fetching members would
+        # make the panel hang for 30+ seconds. Members are loaded
+        # lazily for the chat the operator clicks.
         needs_members: list[ChatDialog] = []
-        for d in dialogs:
-            old = cached_dialogs.get(d.id) or {}
-            updated = (old.get("last_msg_at_ms", 0) or 0) < d.last_msg_at_ms
-            if updated and d.id in cached_messages:
-                cached_messages.pop(d.id, None)
-            if d.id not in cached_members or updated:
-                needs_members.append(d)
+        if self._data_source != "grafana":
+            for d in dialogs:
+                old = cached_dialogs.get(d.id) or {}
+                updated = (old.get("last_msg_at_ms", 0) or 0) < d.last_msg_at_ms
+                if updated and d.id in cached_messages:
+                    cached_messages.pop(d.id, None)
+                if d.id not in cached_members or updated:
+                    needs_members.append(d)
 
-        if needs_members:
-            def _fetch(d: ChatDialog) -> tuple[str, list[ChatPeer]]:
-                try:
-                    return d.id, client.list_dialog_members(d.id)
-                except WebitelError:
-                    return d.id, []
+            if needs_members:
+                def _fetch(d: ChatDialog) -> tuple[str, list[ChatPeer]]:
+                    try:
+                        return d.id, client.list_dialog_members(d.id)
+                    except WebitelError:
+                        return d.id, []
 
-            with ThreadPoolExecutor(max_workers=12) as pool:
-                for did, members in pool.map(_fetch, needs_members):
-                    cached_members[did] = [asdict(m) for m in members]
+                with ThreadPoolExecutor(max_workers=12) as pool:
+                    for did, members in pool.map(_fetch, needs_members):
+                        cached_members[did] = [asdict(m) for m in members]
 
         # Persist updated dialog snapshots
         for d in dialogs:
@@ -315,31 +527,73 @@ class ConversationsPanel(ttk.Frame):
 
     # ---------- filters / render ----------
 
-    def _agent_label(self, chat_id: str) -> str:
+    def _classify(self, chat_id: str) -> tuple[str, str]:
+        """Return (kind, display_label) for a chat:
+          * 'agent' — at least one member with type='user' (real Webitel
+            human account). Display = agent's name.
+          * 'bot' — no user member; the chat sits inside a routing schema.
+            Display = bot/schema name with 🤖 prefix.
+          * 'unknown' — empty member list and nothing in side-channels.
+
+        In Grafana mode we usually have NO member list (we skip the bulk
+        per-chat REST fetch). The side-channel maps populated by
+        `_grafana_dialogs` carry status + agent name and take precedence
+        when no member-list snapshot is loaded yet.
+        """
         members = self._members.get(chat_id, [])
-        for p in members:
-            if p.type == "user":
-                return p.name or f"agent {p.id}"
-        for p in members:
-            if p.type == "bot":
-                return f"🤖 {p.name}" if p.name else "🤖 бот"
-        return "—"
+        if members:
+            for p in members:
+                if (p.type or "").lower() == "user":
+                    return "agent", f"👤 {p.name or 'agent ' + p.id}"
+            for p in members:
+                if (p.type or "").lower() != "user":
+                    name = p.name or "bot"
+                    return "bot", f"🤖 {name}"
+            return "unknown", "❓ —"
+
+        # No members loaded — try Grafana side-channel.
+        status = self._grafana_status_by_chat.get(chat_id)
+        if status == "agent":
+            name = self._grafana_agent_by_chat.get(chat_id, "agent")
+            return "agent", f"👤 {name}"
+        if status == "queued_unanswered":
+            return "agent", "👤 в очереди"
+        if status == "bot":
+            return "bot", "🤖 бот"
+        return "unknown", "❓ —"
 
     def _is_collection(self, chat_id: str) -> bool:
-        if not self._collection_user_ids:
-            return False
-        for p in self._members.get(chat_id, []):
-            if p.type == "user" and p.id in self._collection_user_ids:
-                return True
+        # Member-based check (REST mode or after detail fetch loaded peers).
+        if self._collection_user_ids:
+            for p in self._members.get(chat_id, []):
+                if p.type == "user" and p.id in self._collection_user_ids:
+                    return True
+        # Grafana mode: check the agent_id we got from cc_member_attempt.
+        agent_id = self._grafana_agent_id_by_chat.get(chat_id)
+        if agent_id and agent_id in self._collection_agent_ids:
+            return True
         return False
 
-    def _matches(self, d: ChatDialog) -> bool:
+    def _selected_kind_filter(self) -> Optional[str]:
+        v = self._kind_var.get()
+        if v.startswith("🤖"):
+            return "bot"
+        if v.startswith("👤"):
+            return "agent"
+        if v.startswith("❓"):
+            return "unknown"
+        return None  # "Все"
+
+    def _matches(self, d: ChatDialog, kind: str) -> bool:
         phone = self._phone_var.get().strip()
         if phone:
             haystack = f"{d.peer_id} {d.peer_name}".lower()
             if phone.lower() not in haystack:
                 return False
         if self._collection_var.get() and not self._is_collection(d.id):
+            return False
+        kind_filter = self._selected_kind_filter()
+        if kind_filter and kind != kind_filter:
             return False
         return True
 
@@ -349,8 +603,18 @@ class ConversationsPanel(ttk.Frame):
         for iid in self.tree.get_children():
             self.tree.delete(iid)
         shown = 0
+        n_bot = 0
+        n_agent = 0
+        n_unknown = 0
         for d in self._all_dialogs:
-            if not self._matches(d):
+            kind, label = self._classify(d.id)
+            if kind == "bot":
+                n_bot += 1
+            elif kind == "agent":
+                n_agent += 1
+            else:
+                n_unknown += 1
+            if not self._matches(d, kind):
                 continue
             self.tree.insert(
                 "",
@@ -359,17 +623,27 @@ class ConversationsPanel(ttk.Frame):
                 values=(
                     d.title or d.peer_name or d.peer_id or d.id[:8],
                     d.via_name or d.peer_type,
-                    self._agent_label(d.id),
+                    label,
                     self._fmt_time(d.started_at_ms),
                     self._fmt_time(d.last_msg_at_ms),
                 ),
+                tags=(kind,),
             )
             shown += 1
+        # Subtle row colouring so bot/agent are visually distinct.
+        self.tree.tag_configure("bot",   foreground="#6d28d9")
+        self.tree.tag_configure("agent", foreground="#0f766e")
+        self.tree.tag_configure("unknown", foreground="#6b7280")
         total = len(self._all_dialogs)
+        breakdown = (
+            f"бот: {n_bot} · агент: {n_agent}"
+            + (f" · ?: {n_unknown}" if n_unknown else "")
+        )
+        src_tag = " · pg" if self._data_source == "grafana" else " · rest"
         if shown == total:
-            text = f"Диалогов: {total}"
+            text = f"Диалогов: {total}  ·  {breakdown}{src_tag}"
         else:
-            text = f"Диалогов: {shown} из {total}"
+            text = f"Диалогов: {shown} из {total}  ·  {breakdown}{src_tag}"
         self._status.configure(text=text, foreground=TEXT_FG)
 
     # ---------- messages ----------

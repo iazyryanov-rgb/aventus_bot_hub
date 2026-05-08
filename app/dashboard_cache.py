@@ -61,5 +61,17 @@ def get_snapshot(cache: dict, period_days: int) -> dict | None:
     return (cache.get("snapshots") or {}).get(str(period_days))
 
 
+GC_AGE_MS = 14 * 24 * 3600 * 1000  # 14 days
+
+
 def put_snapshot(cache: dict, period_days: int, snapshot: dict) -> None:
-    cache.setdefault("snapshots", {})[str(period_days)] = snapshot
+    snaps = cache.setdefault("snapshots", {})
+    snaps[str(period_days)] = snapshot
+    # GC: drop snapshots that haven't been touched in 14 days. Avoids the
+    # cache file growing forever as the user changes period/sector combos.
+    now_ms = int(snapshot.get("ts_ms") or 0)
+    if now_ms:
+        for k in list(snaps.keys()):
+            ts = int((snaps[k] or {}).get("ts_ms") or 0)
+            if ts and now_ms - ts > GC_AGE_MS:
+                del snaps[k]

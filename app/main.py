@@ -5,6 +5,7 @@ from .alerts import (
 )
 from .audit_queue import get_queue, reconcile_orphans
 from .data import load_companies
+from .hub_changelog import maybe_send_hub_changelog
 from .paths import icon_path
 from .scheduler import AlertScheduler
 from .ui.main_window import MainWindow
@@ -24,6 +25,13 @@ def main() -> None:
     # operator can re-run.
     try:
         reconcile_orphans()
+    except Exception:
+        pass
+    # If the build's SHA differs from the last one we shipped a
+    # changelog for, post the diff to the general topic. First run
+    # records baseline silently. Best-effort — never blocks startup.
+    try:
+        maybe_send_hub_changelog()
     except Exception:
         pass
     scheduler = AlertScheduler()

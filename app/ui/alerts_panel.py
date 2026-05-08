@@ -57,6 +57,15 @@ class AlertsPanel(ttk.Frame):
             btn_row, text=t("btn_send_test_msg"), command=self._send_test
         )
         self._test_btn.pack(side="left")
+        # Manual hub-changelog dispatch — re-fires the build-update
+        # message into the general "for all" topic. Useful right after
+        # a rebuild or when the operator wants to confirm the topic
+        # is wired up.
+        self._changelog_btn = ttk.Button(
+            btn_row, text=t("btn_send_hub_changelog"),
+            command=self._send_changelog,
+        )
+        self._changelog_btn.pack(side="left", padx=(8, 0))
         self._test_status = ttk.Label(btn_row, text="", foreground="#6b7280")
         self._test_status.pack(side="left", padx=(12, 0))
 
@@ -219,6 +228,51 @@ class AlertsPanel(ttk.Frame):
         text = self._build_test_text_for_alert(a)
         threading.Thread(target=self._send_worker, args=(text,), daemon=True).start()
 
+    def _send_changelog(self) -> None:
+        """Force-fire the hub-changelog message into the general topic.
+        Resets `last_changelog_sha` for the duration of the call so the
+        message is built even when the build hasn't actually changed."""
+        self._changelog_btn.configure(state="disabled")
+        self._test_status.configure(
+            text=t("alerts_sending"), foreground="#6b7280",
+        )
+        threading.Thread(target=self._send_changelog_worker, daemon=True).start()
+
+    def _send_changelog_worker(self) -> None:
+        from ..alerts import (
+            get_last_changelog_sha,
+            load_alerts_config as _load,
+            save_alerts_config as _save,
+            set_last_changelog_sha,
+        )
+        from ..hub_changelog import maybe_send_hub_changelog
+
+        cfg = _load()
+        previous = get_last_changelog_sha(cfg)
+        set_last_changelog_sha(cfg, "")  # force resend regardless of dedup
+        try:
+            _save(cfg)
+        except OSError:
+            pass
+
+        err = maybe_send_hub_changelog()
+
+        # If the helper recorded a baseline (first-run path), the SHA
+        # field is now populated to the current build — leave it.
+        # Otherwise restore previous value on dispatch error so the
+        # next regular start still has the last-known marker.
+        if err and previous:
+            cfg2 = _load()
+            set_last_changelog_sha(cfg2, previous)
+            try:
+                _save(cfg2)
+            except OSError:
+                pass
+
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._send_done(err))
+
     def _send_test(self) -> None:
         self._test_btn.configure(state="disabled")
         self._test_status.configure(text=t("alerts_sending"), foreground="#6b7280")
@@ -261,6 +315,7 @@ class AlertsPanel(ttk.Frame):
         if not self.winfo_exists():
             return
         self._test_btn.configure(state="normal")
+        self._changelog_btn.configure(state="normal")
         self._update_buttons()
         if err:
             self._test_status.configure(text=f"Ошибка: {err}", foreground="#dc2626")

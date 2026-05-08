@@ -203,6 +203,78 @@ def ensure_company_topic(cfg: dict, company, index_hint: int = 0) -> int | None:
     return tid
 
 
+# --- General "for all" topic (hub changelog only) ---------------------------
+
+GENERAL_TOPIC_NAME = "🚀 Aventus Bot Hub · changelog"
+
+
+def get_general_topic(cfg: dict) -> int | None:
+    """The general / cross-company topic id. Reserved for **hub
+    update changelogs only** — every regular alert routes to its own
+    company's topic via `ensure_company_topic`."""
+    val = (cfg.get("telegram") or {}).get("general_topic")
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_general_topic(cfg: dict) -> int | None:
+    """Return the changelog topic id, creating it on first use. Mutates
+    `cfg` and saves it. Returns None if Telegram refuses (non-forum
+    chat / bot rights missing)."""
+    existing = get_general_topic(cfg)
+    if existing:
+        return existing
+    tg = cfg.get("telegram") or {}
+    token = tg.get("bot_token") or ""
+    chat_id = tg.get("chat_id") or ""
+    if not token or not chat_id:
+        return None
+    try:
+        # Color picked deliberately distinct from per-company topics
+        # (latter cycle through 6 hues).
+        tid = create_forum_topic(
+            token, chat_id, GENERAL_TOPIC_NAME, icon_color=9367192,
+        )
+    except TelegramError:
+        return None
+    cfg.setdefault("telegram", {})["general_topic"] = int(tid)
+    try:
+        save_alerts_config(cfg)
+    except OSError:
+        pass
+    return tid
+
+
+def get_last_changelog_sha(cfg: dict) -> str:
+    return str((cfg.get("telegram") or {}).get("last_changelog_sha") or "")
+
+
+def set_last_changelog_sha(cfg: dict, sha: str) -> None:
+    cfg.setdefault("telegram", {})["last_changelog_sha"] = str(sha)
+
+
+def send_hub_changelog(cfg: dict, text: str) -> str | None:
+    """Push a single HTML-formatted changelog message into the general
+    topic. Returns None on success, or an error string."""
+    tg = cfg.get("telegram") or {}
+    token = tg.get("bot_token") or ""
+    chat_id = tg.get("chat_id") or ""
+    if not token or not chat_id:
+        return "Telegram not configured"
+    topic_id = ensure_general_topic(cfg)
+    try:
+        send_telegram_message(
+            token, chat_id, text,
+            parse_mode="HTML",
+            message_thread_id=topic_id,
+        )
+    except TelegramError as exc:
+        return str(exc)
+    return None
+
+
 def get_bot_alerts(company_key: str, kind: str) -> list[dict]:
     cfg = load_alerts_config()
     return list(cfg.get("bot_alerts", {}).get(company_key, {}).get(kind, []) or [])

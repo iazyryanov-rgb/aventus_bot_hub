@@ -164,12 +164,26 @@ def stage_runtime() -> None:
         shutil.copy2(src_ico, DIST / "app-icon.ico")
 
 
+def stamp_version() -> None:
+    """Bake the current HEAD SHA + last 30 commit subjects into
+    `app/_version.py` so the runtime hub-changelog hook can detect
+    "build is newer than what we last announced". Best-effort; on a
+    non-git checkout we leave the placeholder file alone."""
+    try:
+        from app.hub_changelog import write_version_stamp
+    except ImportError:
+        return
+    if write_version_stamp(ROOT):
+        print("Stamped app/_version.py with current HEAD.")
+
+
 def main() -> None:
     if BUILD.exists():
         shutil.rmtree(BUILD)
     spec = ROOT / f"{NAME}.spec"
     if spec.exists():
         spec.unlink()
+    stamp_version()
     run_pyinstaller()
     stage_runtime()
     print(f"\nDone. {DIST / (NAME + '.exe')}")

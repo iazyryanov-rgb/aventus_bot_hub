@@ -38,6 +38,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "btn_delete":              {"RU": "Удалить",               "ENG": "Delete",         "ES": "Eliminar"},
     "btn_send_test":           {"RU": "Отправить пробный",     "ENG": "Send test",      "ES": "Enviar prueba"},
     "btn_send_test_msg":       {"RU": "Отправить тестовое сообщение", "ENG": "Send test message", "ES": "Enviar mensaje de prueba"},
+    "btn_send_hub_changelog":  {"RU": "Отправить changelog хаба", "ENG": "Send hub changelog", "ES": "Enviar changelog del hub"},
     # dashboard
     "dash_header":             {"RU": "ДАШБОРД",               "ENG": "DASHBOARD",      "ES": "PANEL"},
     "dash_period":             {"RU": "Период:",               "ENG": "Period:",        "ES": "Periodo:"},

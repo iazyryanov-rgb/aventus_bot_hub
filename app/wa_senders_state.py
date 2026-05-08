@@ -201,9 +201,12 @@ def diff(prev: Iterable[dict], cur: Iterable[dict]) -> list[Change]:
             before="missing",
             after="present",
             severity=SEV_INFO,
-            note=f"new sender attached: {c.get('connectionStatus','?')}, "
-                 f"quality={c.get('qualityRating','?')}, "
-                 f"limit={c.get('limit','?')}",
+            note=(
+                "new sender attached: "
+                f"{humanize_status(str(c.get('connectionStatus') or ''))}, "
+                f"quality={humanize_quality(str(c.get('qualityRating') or ''))}, "
+                f"limit={humanize_limit(str(c.get('limit') or ''))}"
+            ),
         ))
 
     # Field-level deltas for senders present in both snapshots.
@@ -219,7 +222,10 @@ def diff(prev: Iterable[dict], cur: Iterable[dict]) -> list[Change]:
                 sender=sid, display_name=display, field="quality",
                 before=before, after=after,
                 severity=_quality_delta_severity(before, after),
-                note=f"quality {before or '?'} → {after or '?'}",
+                note=(
+                    f"quality {humanize_quality(before) or '?'} → "
+                    f"{humanize_quality(after) or '?'}"
+                ),
             ))
 
         before = str(p.get("connectionStatus") or "")
@@ -229,7 +235,10 @@ def diff(prev: Iterable[dict], cur: Iterable[dict]) -> list[Change]:
                 sender=sid, display_name=display, field="status",
                 before=before, after=after,
                 severity=_status_delta_severity(before, after),
-                note=f"status {before or '?'} → {after or '?'}",
+                note=(
+                    f"status {humanize_status(before) or '?'} → "
+                    f"{humanize_status(after) or '?'}"
+                ),
             ))
 
         before = str(p.get("limit") or "")
@@ -239,7 +248,10 @@ def diff(prev: Iterable[dict], cur: Iterable[dict]) -> list[Change]:
                 sender=sid, display_name=display, field="limit",
                 before=before, after=after,
                 severity=_limit_delta_severity(before, after),
-                note=f"messaging limit {before or '?'} → {after or '?'}",
+                note=(
+                    f"messaging limit {humanize_limit(before) or '?'} → "
+                    f"{humanize_limit(after) or '?'}"
+                ),
             ))
 
         before = str(p.get("registrationStatus") or "")

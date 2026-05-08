@@ -47,6 +47,19 @@
                     "notes": "Поллит CRM Lendi (public.dialer_process) — алерт по новым строкам со state='error'. Throttle через high-water mark по updated_at: каждый сбой репортится один раз. На первом запуске выставляет water-mark = max(updated_at) и не алертит исторические ошибки.",
                     "id": "b4ff49879fb52366"
                 }
+            ],
+            "whatsapp": [
+                {
+                    "name": "WA Senders · health (Infobip)",
+                    "template": "wa_senders_health",
+                    "schedule": "Каждые 30 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": false,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Поллит Infobip /whatsapp/2/senders. Алерт при понижении quality / лимита и при переходе в BANNED/RESTRICTED/RATE_LIMITED/FLAGGED. INFO-изменения (новый сендер, recovery) видны в панели «Сендеры», в TG не уходят. Первый запуск — тихо сохраняет baseline.",
+                    "id": "984600c5c16a8080"
+                }
             ]
         },
         "CO_": {
@@ -143,6 +156,19 @@
                     "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
                     "id": "e97cf300c645f88c"
                 }
+            ],
+            "whatsapp": [
+                {
+                    "name": "WA Senders · health (Infobip)",
+                    "template": "wa_senders_health",
+                    "schedule": "Каждые 30 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": false,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Поллит Infobip /whatsapp/2/senders. Алерт при понижении quality / лимита и при переходе в BANNED/RESTRICTED/RATE_LIMITED/FLAGGED. INFO-изменения (новый сендер, recovery) видны в панели «Сендеры», в TG не уходят. Первый запуск — тихо сохраняет baseline.",
+                    "id": "53528ee6a87e0525"
+                }
             ]
         },
         "PE_": {
@@ -168,6 +194,19 @@
                     "enabled": true,
                     "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
                     "id": "60f24aed731cf22d"
+                }
+            ],
+            "whatsapp": [
+                {
+                    "name": "WA Senders · health (Infobip)",
+                    "template": "wa_senders_health",
+                    "schedule": "Каждые 30 минут",
+                    "trigger_mode": "event",
+                    "working_hours_only": false,
+                    "start_time": "",
+                    "enabled": true,
+                    "notes": "Поллит Infobip /whatsapp/2/senders. Алерт при понижении quality / лимита и при переходе в BANNED/RESTRICTED/RATE_LIMITED/FLAGGED. INFO-изменения (новый сендер, recovery) видны в панели «Сендеры», в TG не уходят. Первый запуск — тихо сохраняет baseline.",
+                    "id": "a8afaac4268dada3"
                 }
             ]
         }

@@ -998,11 +998,35 @@ def _build_wa_senders_health_text(company: Company) -> Optional[str]:
 
     severity = state.worst_severity(actionable)
     bullets = []
+
+    def _humanize_value(field: str, value: str) -> str:
+        if field == "quality":
+            return state.humanize_quality(value)
+        if field == "status":
+            return state.humanize_status(value)
+        if field == "limit":
+            return state.humanize_limit(value)
+        return value or "—"
+
+    field_labels = {
+        "quality":      "quality",
+        "status":       "status",
+        "limit":        "messaging limit",
+        "registration": "registration",
+        "presence":     "presence",
+    }
+    # Bullets are HTML-escaped by render_alert_html, so we keep them as
+    # plain text and rely on the arrow + ': ' to separate field / before
+    # / after. Telegram still bolds the bullet via the • + body shape.
     for ch in actionable[:25]:
         sender_label = state.format_phone(ch.sender)
         name = ch.display_name or sender_label
+        label = field_labels.get(ch.field, ch.field)
+        before_h = _humanize_value(ch.field, ch.before)
+        after_h = _humanize_value(ch.field, ch.after)
         bullets.append(
-            f"<b>{name}</b> ({sender_label}) — {ch.note}"
+            f"{name} ({sender_label}) — {label}: "
+            f"{before_h} → {after_h}"
         )
     if len(actionable) > 25:
         bullets.append(f"…and {len(actionable) - 25} more change(s)")

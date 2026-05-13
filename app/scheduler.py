@@ -1060,6 +1060,107 @@ def _build_wa_senders_health_text(company: Company) -> Optional[str]:
     )
 
 
+def _build_wa_send_time_recommendation_text(company: Company) -> Optional[str]:
+    """Daily recommendation: which hour to send mass-WA for best reply
+    rate. Pulls last 30 days of Webitel chats (= replies to mass dispatch
+    per the user's mental model) and ranks the distribution by
+    company-local hour-of-day.
+    """
+    try:
+        from datetime import datetime, timedelta
+        from collections import Counter
+        try:
+            from zoneinfo import ZoneInfo  # Py 3.9+
+        except ImportError:
+            ZoneInfo = None  # noqa: N806
+        from . import grafana_pg
+        from .wa_bot_config import get_owned_whatsapp_numbers
+    except Exception:
+        return None
+
+    if not grafana_pg.is_configured(company.key):
+        return None
+    nums = get_owned_whatsapp_numbers(company.key)
+    if not nums:
+        return None
+
+    tz = None
+    if ZoneInfo is not None and company.timezone:
+        try:
+            tz = ZoneInfo(company.timezone)
+        except Exception:
+            tz = None
+
+    now_utc = datetime.utcnow()
+    since_dt = now_utc - timedelta(days=30)
+    since_ms = int(since_dt.timestamp() * 1000)
+    until_ms = int(now_utc.timestamp() * 1000)
+
+    try:
+        chats = grafana_pg.list_chat_conversations(
+            since_ms, until_ms,
+            company_key=company.key,
+            channel="whatsapp",
+            whatsapp_numbers=nums,
+            limit=20000,
+        )
+    except Exception:
+        return None
+    if not chats:
+        return None
+
+    by_hour: Counter[int] = Counter()
+    for c in chats:
+        ts = c.get("created_at_ms") or 0
+        try:
+            ts_f = float(ts)
+        except (TypeError, ValueError):
+            continue
+        if ts_f <= 0:
+            continue
+        dt = datetime.fromtimestamp(ts_f / 1000.0, tz=tz) if tz else datetime.fromtimestamp(ts_f / 1000.0)
+        by_hour[dt.hour] += 1
+
+    if not by_hour:
+        return None
+
+    total = sum(by_hour.values())
+    max_n = max(by_hour.values())
+    top3 = sorted(by_hour.items(), key=lambda kv: kv[1], reverse=True)[:3]
+    top_hours = {h for h, _ in top3}
+
+    BAR = 24  # max bar chars
+    rows = []
+    for h in range(24):
+        n = by_hour.get(h, 0)
+        bar = "█" * (n * BAR // max_n) if max_n else ""
+        pct = (100.0 * n / total) if total else 0.0
+        marker = " ★" if h in top_hours else "  "
+        rows.append(f"  {h:02d}:00  {bar:<{BAR}s}  {n:5d}  {pct:5.1f}%{marker}")
+
+    tz_label = company.timezone or "UTC"
+    period_label = f"{since_dt.strftime('%Y-%m-%d')} → {now_utc.strftime('%Y-%m-%d')}"
+    code = company.key.rstrip("_")
+    top_str = "  ·  ".join(
+        f"<b>{h:02d}:00</b> ({by_hour[h]} chats)" for h, _ in top3
+    )
+
+    return (
+        f"🕒 <b>WA — best send time</b>\n"
+        f"<b>{code} — {company.name}</b>  ({tz_label})\n"
+        f"Window: {period_label} (last 30 days)\n"
+        f"Client replies received: <b>{total}</b>\n"
+        f"\n"
+        f"<b>Top-3 hours for mass-WA dispatch:</b>\n  {top_str}\n"
+        f"\n"
+        f"<b>Reply distribution by hour ({tz_label}):</b>\n"
+        f"<pre>{chr(10).join(rows)}</pre>\n"
+        f"★ marks the peak-reply hours. Webitel chats are created when "
+        f"the client replies to a mass-WA dispatch, so the peak hours = "
+        f"when our recipients are most active."
+    )
+
+
 # ---------------------------------------------------------------------------
 
 TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
@@ -1076,6 +1177,7 @@ TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "wa_senders_health": _build_wa_senders_health_text,
     "cohort_imbalance": _build_cohort_imbalance_text,
     "crm_call_list_failed": _build_crm_call_list_failed_text,
+    "wa_send_time_recommendation": _build_wa_send_time_recommendation_text,
 }
 
 

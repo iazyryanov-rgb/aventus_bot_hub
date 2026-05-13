@@ -7,12 +7,23 @@ to mark one tester as the company default.
 from __future__ import annotations
 
 import re
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Optional
 
+from ..alerts import (
+    ensure_company_topic,
+    load_alerts_config,
+    save_alerts_config,
+    send_telegram_message,
+    TelegramError,
+)
+from ..crm_lookup import find_client_phone_by_criteria
 from ..data import Company
 from ..i18n import t
+from ..loan_statuses import get_sector, get_statuses
+from ..router_testers import RouterTester, save_testers as save_router_testers
 from ..testers import (
     ENVIRONMENTS,
     delete_tester,
@@ -21,7 +32,23 @@ from ..testers import (
     set_default_tester,
     upsert_tester,
 )
+from ..webitel import WebitelError
 from .colors import META_FG
+
+
+CLIENT_TYPES = ("NEW", "REP")
+
+
+def _mask_digits(s: str, head: int = 3, tail: int = 3, ch: str = "*") -> str:
+    """Mask the middle of a phone-like string: keep `head` leading and
+    `tail` trailing characters, replace the rest with `ch`. Short strings
+    (<=head+tail) are returned untouched so we never reveal a 1:1 string."""
+    s = str(s or "")
+    if not s:
+        return ""
+    if len(s) <= head + tail:
+        return s
+    return s[:head] + ch * (len(s) - head - tail) + s[-tail:]
 
 
 class TestersPanel(ttk.Frame):
@@ -67,6 +94,16 @@ class TestersPanel(ttk.Frame):
             state="disabled",
         )
         self._default_btn.pack(side="left", padx=(8, 0))
+        # Sync local testers.json → router schema (testers customModule) +
+        # post a status alert to the company's TG topic.
+        self._sync_btn = ttk.Button(
+            toolbar,
+            text=t("testers_sync_wa_bot"),
+            command=self._sync_to_wa_bot,
+        )
+        self._sync_btn.pack(side="left", padx=(8, 0))
+        self._sync_status = ttk.Label(toolbar, text="", foreground=META_FG)
+        self._sync_status.pack(side="left", padx=(10, 0))
 
         cols = (
             "name", "phone", "destination", "environment",
@@ -189,6 +226,176 @@ class TestersPanel(ttk.Frame):
     def _on_saved(self, _tester: dict) -> None:
         self._reload()
 
+    # ------------------------------------------------------------------
+    # Sync local testers.json → router schema (testers customModule)
+    # ------------------------------------------------------------------
+
+    def _sync_to_wa_bot(self) -> None:
+        """Push the current testers list to the company's router schema and
+        post a TG status alert. Runs in a background thread so the UI
+        stays responsive — the router rebuild + Webitel PUT can take a
+        few seconds."""
+        data = load_testers(self._company.key)
+        testers = data.get("testers") or []
+        if not testers:
+            messagebox.showinfo(
+                t("testers_sync_wa_bot"),
+                t("testers_sync_empty"),
+                parent=self.winfo_toplevel(),
+            )
+            return
+        self._sync_btn.configure(state="disabled")
+        self._sync_status.configure(
+            text=t("testers_sync_running"), foreground=META_FG,
+        )
+        threading.Thread(
+            target=self._sync_worker, args=(list(testers),), daemon=True,
+        ).start()
+
+    def _sync_worker(self, testers: list[dict]) -> None:
+        # Map local tester format (testers.json) -> RouterTester for the
+        # router-schema rebuild.
+        # `phone` (= router switch case) MUST come from `phone_e164` — that's
+        # what the operator writes the bot from. `destination` is a separate
+        # override for downstream CRM lookup: when destination differs from
+        # phone, the tester's set node rewrites ${user}=destination so the
+        # bot fetches the loan attached to a chosen test number, while still
+        # being routed by their real handset phone.
+        router_testers: list[RouterTester] = []
+        for tt in testers:
+            phone = "".join(
+                ch for ch in str(tt.get("phone_e164") or "") if ch.isdigit()
+            )
+            if not phone:
+                phone = "".join(
+                    ch for ch in str(tt.get("destination") or "") if ch.isdigit()
+                )
+            if not phone:
+                continue
+            destination = "".join(
+                ch for ch in str(tt.get("destination") or "") if ch.isdigit()
+            ) or phone
+            env = (tt.get("environment") or "").lower()
+            area = "bot_candidate" if env == "staging" else "bot_prod"
+            router_testers.append(RouterTester(
+                phone=phone,
+                test_owner=str(tt.get("display_name") or "").strip() or phone,
+                test_area=area,
+                destination=destination,
+            ))
+
+        try:
+            result = save_router_testers(
+                self._company.key, router_testers,
+                snapshot_label="testers-ui-sync",
+            )
+        except KeyError as e:
+            self._after_sync(False, str(e), router_testers)
+            return
+        except WebitelError as e:
+            self._after_sync(False, str(e), router_testers)
+            return
+        except Exception as e:  # noqa: BLE001 — surface any unexpected error
+            self._after_sync(False, f"{type(e).__name__}: {e}", router_testers)
+            return
+
+        if not result.get("ok"):
+            self._after_sync(
+                False, result.get("error", "sync failed"), router_testers,
+            )
+            return
+
+        tg_err = self._post_tg_alert(testers, router_testers, result)
+        msg = (
+            t("testers_sync_done").format(n=len(router_testers))
+            + (f" · TG: {tg_err}" if tg_err else "")
+        )
+        self._after_sync(True, msg, router_testers)
+
+    def _post_tg_alert(
+        self,
+        testers_json: list[dict],
+        router_testers: list[RouterTester],
+        result: dict,
+    ) -> Optional[str]:
+        """Best-effort post to the company's TG topic. Returns None on
+        success, or an error string to surface in the status line."""
+        cfg = load_alerts_config()
+        tg = cfg.get("telegram") or {}
+        token = tg.get("bot_token") or ""
+        chat_id = tg.get("chat_id") or ""
+        if not token or not chat_id:
+            return "TG not configured"
+        topic_id = ensure_company_topic(cfg, self._company)
+        try:
+            save_alerts_config(cfg)
+        except OSError:
+            pass
+
+        code = self._company.key.rstrip("_")
+        lines = [
+            f"🧪 <b>Testers synced to WhatsApp bot — {self._html_esc(code)} "
+            f"({self._html_esc(self._company.name)})</b>",
+            f"Router schema: <code>{result.get('router_schema_id')}</code> · "
+            f"updated_at: <code>{result.get('new_updated_at')}</code>",
+            "",
+        ]
+        # Pair testers.json entries with router_testers by phone for the
+        # masked phone/destination view.
+        by_phone = {rt.phone: rt for rt in router_testers}
+        for i, tt in enumerate(testers_json, start=1):
+            phone_raw = str(tt.get("phone_e164") or "").strip()
+            dest_raw = "".join(
+                ch for ch in str(tt.get("destination") or "") if ch.isdigit()
+            )
+            rt = by_phone.get(dest_raw) if dest_raw else None
+            name = self._html_esc(
+                tt.get("display_name") or rt.test_owner if rt else "?"
+            )
+            phone_m = self._html_esc(_mask_digits(phone_raw, head=4, tail=3))
+            dest_m = self._html_esc(_mask_digits(dest_raw, head=3, tail=3))
+            area = self._html_esc(rt.test_area if rt else "—")
+            lines.append(
+                f"{i}. <b>{name}</b> · phone <code>{phone_m}</code> · "
+                f"dest <code>{dest_m}</code> · area <code>{area}</code>"
+            )
+        text = "\n".join(lines)
+
+        try:
+            send_telegram_message(
+                token, chat_id, text,
+                parse_mode="HTML",
+                message_thread_id=topic_id,
+            )
+        except TelegramError as exc:
+            return str(exc)
+        return None
+
+    @staticmethod
+    def _html_esc(s: str) -> str:
+        return (
+            str(s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    def _after_sync(
+        self, ok: bool, msg: str, router_testers: list[RouterTester],
+    ) -> None:
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._render_sync_result(ok, msg))
+
+    def _render_sync_result(self, ok: bool, msg: str) -> None:
+        if not self.winfo_exists():
+            return
+        self._sync_btn.configure(state="normal")
+        self._sync_status.configure(
+            text=msg,
+            foreground=("#16a34a" if ok else "#dc2626"),
+        )
+
 
 class TesterEditDialog(tk.Toplevel):
     """Modal-ish edit dialog. Single column form, autoderives `destination`
@@ -243,6 +450,76 @@ class TesterEditDialog(tk.Toplevel):
         self._owner_var = self._add_entry(frm, row, t("testers_field_owner"), self._tester.get("test_owner_key", ""))
         row += 1
 
+        # --- CRM-search criteria (also persisted on the tester record) ---
+        self._dpd_var = self._add_entry(
+            frm, row, t("testers_field_dpd"),
+            str(self._tester.get("dpd", "0") or "0"),
+        )
+        row += 1
+
+        # Loan status combo — only statuses with a non-empty sector for this
+        # company (the operator already curated those in the loan-statuses
+        # panel). Codes without a sector are hidden to keep the picker short.
+        # All loan statuses for this company — without the sector filter,
+        # so the operator can pick any state (CO_ has many statuses with
+        # no sector tag yet). Keeps the combobox writable so any custom
+        # value can be typed.
+        statuses = get_statuses(company.key) or {}
+        sorted_codes = sorted(
+            statuses.items(),
+            key=lambda kv: int(kv[0]) if kv[0].lstrip("-").isdigit() else 0,
+        )
+        self._loan_status_labels: dict[str, str] = {"": "—"}
+        for code, name in sorted_codes:
+            sector = get_sector(company.key, code) or ""
+            suffix = f" ({sector})" if sector else ""
+            self._loan_status_labels[code] = f"{code} — {name}{suffix}"
+        self._loan_status_code_by_label = {
+            lbl: code for code, lbl in self._loan_status_labels.items()
+        }
+        ttk.Label(frm, text=t("testers_field_loan_status") + ":").grid(
+            row=row, column=0, sticky="w", pady=2,
+        )
+        cur_status = str(self._tester.get("loan_status") or "")
+        self._loan_status_var = tk.StringVar(
+            value=self._loan_status_labels.get(cur_status, "—"),
+        )
+        ttk.Combobox(
+            frm,
+            textvariable=self._loan_status_var,
+            values=list(self._loan_status_labels.values()),
+            width=40,
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        ttk.Label(frm, text=t("testers_field_client_type") + ":").grid(
+            row=row, column=0, sticky="w", pady=2,
+        )
+        self._client_type_var = tk.StringVar(
+            value=str(self._tester.get("client_type") or "NEW"),
+        )
+        ttk.Combobox(
+            frm,
+            textvariable=self._client_type_var,
+            values=list(CLIENT_TYPES),
+            state="readonly",
+            width=20,
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        # --- CRM lookup button ---
+        crm_row = ttk.Frame(frm)
+        crm_row.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(4, 6))
+        self._find_btn = ttk.Button(
+            crm_row,
+            text=t("testers_find_client"),
+            command=self._find_client_in_crm,
+        )
+        self._find_btn.pack(side="left")
+        self._find_status = ttk.Label(crm_row, text="", foreground=META_FG)
+        self._find_status.pack(side="left", padx=(10, 0))
+        row += 1
+
         ttk.Label(frm, text=t("testers_field_notes") + ":").grid(
             row=row, column=0, sticky="nw", pady=2,
         )
@@ -288,6 +565,18 @@ class TesterEditDialog(tk.Toplevel):
         if not dest and phone:
             dest = re.sub(r"\D", "", phone)
         notes = self._notes_text.get("1.0", "end").rstrip()
+        # CRM-search fields (also used by the «Найти клиента» button).
+        dpd_raw = self._dpd_var.get().strip() or "0"
+        try:
+            dpd_val: int = int(dpd_raw)
+        except ValueError:
+            dpd_val = 0
+        loan_status_code = self._loan_status_code_by_label.get(
+            self._loan_status_var.get(), "",
+        )
+        client_type = (self._client_type_var.get() or "NEW").strip().upper()
+        if client_type not in CLIENT_TYPES:
+            client_type = "NEW"
         record = {
             **self._tester,
             "display_name": name,
@@ -297,6 +586,9 @@ class TesterEditDialog(tk.Toplevel):
             "test_owner_key": self._owner_var.get().strip(),
             "company": self._company.name,
             "notes": notes,
+            "dpd": dpd_val,
+            "loan_status": loan_status_code,
+            "client_type": client_type,
         }
         if not record.get("id"):
             record["id"] = make_tester_id(name, dest)
@@ -308,3 +600,86 @@ class TesterEditDialog(tk.Toplevel):
         if self._on_saved:
             self._on_saved(record)
         self.destroy()
+
+    # ------------------------------------------------------------------
+    # CRM search (manual)
+    # ------------------------------------------------------------------
+
+    def _find_client_in_crm(self) -> None:
+        """Query the company's CRM DB for a client matching the current
+        dpd / loan_status / client_type form values. On hit, ask the
+        operator to substitute the found phone into the destination field.
+        Runs in a background thread so the dialog stays responsive."""
+        dpd_raw = self._dpd_var.get().strip()
+        try:
+            dpd_val: Optional[int] = int(dpd_raw) if dpd_raw else 0
+        except ValueError:
+            self._find_status.configure(
+                text=t("testers_dpd_must_be_int"), foreground="#dc2626",
+            )
+            return
+        loan_status_code = self._loan_status_code_by_label.get(
+            self._loan_status_var.get(), "",
+        )
+        loan_status_int: Optional[int] = None
+        if loan_status_code:
+            try:
+                loan_status_int = int(loan_status_code)
+            except ValueError:
+                loan_status_int = None
+        client_type = (self._client_type_var.get() or "NEW").strip().upper()
+        if client_type not in CLIENT_TYPES:
+            client_type = None
+
+        self._find_btn.configure(state="disabled")
+        self._find_status.configure(
+            text=t("testers_finding"), foreground=META_FG,
+        )
+        threading.Thread(
+            target=self._find_worker,
+            args=(dpd_val, loan_status_int, client_type),
+            daemon=True,
+        ).start()
+
+    def _find_worker(
+        self,
+        dpd: Optional[int],
+        loan_status: Optional[int],
+        client_type: Optional[str],
+    ) -> None:
+        phone, err = find_client_phone_by_criteria(
+            self._company,
+            dpd=dpd,
+            loan_status=loan_status,
+            client_type=client_type,
+        )
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._after_find(phone, err))
+
+    def _after_find(self, phone: Optional[str], err: Optional[str]) -> None:
+        if not self.winfo_exists():
+            return
+        self._find_btn.configure(state="normal")
+        if err or not phone:
+            self._find_status.configure(
+                text=err or t("testers_not_found"), foreground="#dc2626",
+            )
+            return
+        # Hit — propose substitution. We don't auto-overwrite so the
+        # operator stays in control of the destination value.
+        masked = _mask_digits(phone, head=3, tail=3)
+        if messagebox.askyesno(
+            t("testers_find_client"),
+            t("testers_found_phone").format(phone=masked),
+            parent=self,
+        ):
+            self._dest_var.set(phone)
+            self._find_status.configure(
+                text=t("testers_dest_updated"), foreground="#16a34a",
+            )
+        else:
+            self._find_status.configure(
+                text=t("testers_found_phone_short").format(phone=masked),
+                foreground=META_FG,
+            )

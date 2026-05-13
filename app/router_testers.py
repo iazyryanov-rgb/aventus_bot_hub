@@ -54,12 +54,17 @@ class RouterTester:
     phone: str         # full digits, e.g. "573122562287"
     test_owner: str    # e.g. "Ivan"
     test_area: str     # one of TEST_AREA_OPTIONS
+    destination: str = ""  # what the bot uses as `${destination}` for this
+    # tester. Usually equals `phone`, but the hub model allows pointing the
+    # bot at a different number (e.g. when a tester signs in from a foreign
+    # SIM but should be routed against a fixed CO loan).
 
     def to_dict(self) -> dict:
         return {
             "phone": self.phone,
             "test_owner": self.test_owner,
             "test_area": self.test_area,
+            "destination": self.destination,
         }
 
 
@@ -188,6 +193,7 @@ def list_testers(co_key: str) -> list[RouterTester]:
             phone=case_text,
             test_owner=kv.get("test_owner", ""),
             test_area=kv.get("test_area", ""),
+            destination=kv.get("destination", ""),
         ))
     return testers
 
@@ -245,11 +251,17 @@ def _input_port(pid: str) -> dict:
     }
 
 
-def _output_port(pid: str, position: int) -> dict:
+def _output_port(pid: str, position: int, type_: str = "out") -> dict:
+    """Build an output socket spec for a Webitel switch/set node.
+
+    For switch nodes, `type_` MUST equal the matching `case.text` value —
+    otherwise Webitel can't route to the right branch and falls back to
+    default for everything. Default `"out"` is fine for set/js nodes that
+    have a single passthrough output."""
     return {
         "id": pid,
         "label": pid,
-        "type": "out",
+        "type": type_,
         "socket": {"name": "socket"},
         "position": position,
         "goto": False,
@@ -259,9 +271,11 @@ def _output_port(pid: str, position: int) -> dict:
 
 def _make_tester_set_node(
     page_id: str, *, test_owner: str, test_area: str,
+    destination: str = "",
 ) -> tuple[dict, str, str]:
     """Build a fresh `set` node for one tester. Returns (node, in_port_id,
-    out_port_id)."""
+    out_port_id). `destination` controls the bot's `${destination}` for
+    this tester — leave empty to fall back to the upstream value."""
     nid = _new_node_id()
     in_id = _new_port_id()
     out_id = _new_port_id()
@@ -275,9 +289,18 @@ def _make_tester_set_node(
         "commons": {"break": False, "limit": None},
         "controls": {},
         "schema": {
+            # `user` is also overridden so that downstream CRM lookup
+            # (`crm_lookup_url` uses `{user}` placeholder) hits the loan
+            # attached to the tester's chosen destination phone, not the
+            # tester's real handset phone. Without this override, the CRM
+            # query would still be made against `${user}` (= the sender
+            # phone), and the tester would see their own real-loan data
+            # instead of the test loan they pointed `destination` at.
             "set": [
                 {"key": "test_owner", "value": str(test_owner)},
                 {"key": "test_area", "value": str(test_area)},
+                {"key": "destination", "value": str(destination)},
+                {"key": "user", "value": str(destination)},
             ],
         },
         "tag": f"set__{nid}",
@@ -349,13 +372,18 @@ def _rebuild_testers_payload(
     out_ids.append(default_port)
     cases.append({"text": "default"})
 
-    # Replace switch.outputs and switch.schema.case
+    # Replace switch.outputs and switch.schema.case.
+    # For Webitel switch nodes the routing decision is made by matching
+    # the case text against each output's `type` field — so each output
+    # MUST carry the matching case text as type, otherwise traffic falls
+    # through to default for every tester.
     sw_node_idx = next(
         i for i, n in enumerate(new_nodes) if n["id"] == sw["id"]
     )
     new_sw = deepcopy(sw)
     new_sw["outputs"] = {
-        oid: _output_port(oid, pos) for pos, oid in enumerate(out_ids)
+        oid: _output_port(oid, pos, type_=str(cases[pos]["text"]))
+        for pos, oid in enumerate(out_ids)
     }
     sch = dict(new_sw.get("schema") or {})
     sch["case"] = cases
@@ -372,18 +400,23 @@ def _rebuild_testers_payload(
             start["id"], start_out, sw["id"], sw_in_id, page_id,
         ))
 
-    # 2) For each tester case → fresh set node → test_ctx.
-    test_ctx_in = next(iter((test_ctx.get("inputs") or {}).keys()), None)
-    if test_ctx_in is None:
-        # rare: no input port — synthesise. But this shouldn't happen.
+    # 2) For each tester case → fresh set node → real_base.
+    # We route testers through `real_base` (prod context) instead of the
+    # legacy `test_ctx` because test_ctx hardcodes destination to a sample
+    # phone — that overrides our per-tester `destination` and breaks the
+    # use case "tester writes from their handset phone but we want CRM to
+    # be queried by a custom destination phone". Real flow + override = ok.
+    real_base_in_for_testers = next(iter((real_base.get("inputs") or {}).keys()), None)
+    if real_base_in_for_testers is None:
         raise WebitelError(
-            "test_ctx anchor has no input port — can't wire testers"
+            "real_base anchor has no input port — can't wire testers"
         )
 
     base_y = -160
     for idx, t in enumerate(testers):
         node, in_id, out_id = _make_tester_set_node(
             page_id, test_owner=t.test_owner, test_area=t.test_area,
+            destination=t.destination or t.phone,
         )
         new_nodes.append(node)
         new_positions[node["id"]] = {
@@ -394,9 +427,9 @@ def _rebuild_testers_payload(
         new_connections.append(_connection(
             sw["id"], out_ids[idx], node["id"], in_id, page_id,
         ))
-        # tester-set → test_ctx
+        # tester-set → real_base
         new_connections.append(_connection(
-            node["id"], out_id, test_ctx["id"], test_ctx_in, page_id,
+            node["id"], out_id, real_base["id"], real_base_in_for_testers, page_id,
         ))
 
     # 3) Default case → real_base.

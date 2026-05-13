@@ -2,6 +2,7 @@ from .alerts import (
     ensure_default_agent_alerts,
     ensure_default_ai_audit_alerts,
     ensure_default_health_alerts,
+    ensure_default_wa_send_time_alerts,
 )
 from .audit_queue import get_queue, reconcile_orphans
 from .data import load_companies
@@ -18,6 +19,7 @@ def main() -> None:
         ensure_default_agent_alerts(keys)
         ensure_default_ai_audit_alerts(keys)
         ensure_default_health_alerts(keys)
+        ensure_default_wa_send_time_alerts(keys)
     except Exception:
         pass
     # Mark any audit jobs that were running when the previous process

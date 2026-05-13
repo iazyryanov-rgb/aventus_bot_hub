@@ -1,0 +1,221 @@
+{
+  "gateway_name": "WhatsApp-Infobip",
+  "crm_lookup_url": "https://api.credito365.co/api/partner/webitel/client-info?phone={user}",
+  "crm_lookup_vars": [
+    {
+      "local": "collector_id",
+      "remote": "collector_id"
+    },
+    {
+      "local": "link",
+      "remote": "link"
+    },
+    {
+      "local": "client_id",
+      "remote": "client_id"
+    },
+    {
+      "local": "dpd",
+      "remote": "dpd"
+    },
+    {
+      "local": "amount",
+      "remote": "outstanding_amount"
+    },
+    {
+      "local": "ptp_date",
+      "remote": "ptp_date"
+    },
+    {
+      "local": "ptp_status",
+      "remote": "ptp_status"
+    },
+    {
+      "local": "ptp_amount",
+      "remote": "ptp_amount"
+    },
+    {
+      "local": "loan_id",
+      "remote": "loan_id"
+    },
+    {
+      "local": "discount_valid_to",
+      "remote": "discount_valid_until"
+    },
+    {
+      "local": "discount_payment",
+      "remote": "discounted_payment_amount"
+    },
+    {
+      "local": "discount_type",
+      "remote": "discount_type"
+    },
+    {
+      "local": "extension_min_payment",
+      "remote": "extension_amount"
+    },
+    {
+      "local": "loan_type",
+      "remote": "loan_type"
+    },
+    {
+      "local": "client_full_name",
+      "remote": "client_name"
+    },
+    {
+      "local": "last_wa_template",
+      "remote": "last_wa_template"
+    },
+    {
+      "local": "short_link",
+      "remote": "short_link"
+    },
+    {
+      "local": "status",
+      "remote": "status"
+    }
+  ],
+  "result_post_url": "https://api.credito365.co/api/partner/webitel/robot_phone_result_v2",
+  "result_post_fields": [
+    {
+      "key": "loan_id",
+      "value": "${loan_id}"
+    },
+    {
+      "key": "collector_id",
+      "value": "${collector_id}"
+    },
+    {
+      "key": "call_type",
+      "value": "${crm_call_type}"
+    },
+    {
+      "key": "contact_type",
+      "value": "${contact_type}"
+    },
+    {
+      "key": "direction",
+      "value": "wa_bot_inbound"
+    },
+    {
+      "key": "contact_result",
+      "value": "${contact_result}"
+    },
+    {
+      "key": "comment",
+      "value": "${chat_log}"
+    },
+    {
+      "key": "phone_number",
+      "value": "${destination}"
+    },
+    {
+      "key": "promise_type",
+      "value": "${promise_type}"
+    },
+    {
+      "key": "promise_date",
+      "value": "${promise_date}"
+    },
+    {
+      "key": "promise_amount",
+      "value": "${promise_amount}"
+    }
+  ],
+  "gpt": {
+    "model": "gpt-4.1-mini",
+    "main_prompt": "General response requirements\n\nAlways return only one plain text response.\n\nRole and context\n\nYou speak exclusively Spanish.\nYou act as an employee of the Crédito 365 debt collection operator (not as a virtual assistant).\nIf there was already a message from an operator in the conversation, do not greet the client again.\n\nObjective\n\nThe main objective is to obtain a promise to pay.\nYou must act in a persistent and intrusive manner, without rudeness or insults.\nIf you are not sure the promise to pay will be fulfilled, try to obtain the date and the amount of the promise.\nIf the interlocutor uses the words \"Today or tomorrow\", then we directly understand this as the payment date.\nIf the interlocutor says they will pay the full closing amount, it means we have received information about the payment amount. The result of the communication received in the event will be a full payment promise.\nIf the interlocutor says they will pay to extend the term, it means we have received information about the payment amount. The result of the communication received in the function will be a renewal promise.\n\nTarget dialogue outcomes\n\nFull payment promise – The client provides the payment date and amount.\nRenewal promise (extension): the client promises to pay the amount for the renewal.\n\nPromise to Pay Rules\n\nIf the client understands the date and amount of their promise to pay and wants to close the loan, this is a full payment promise.\nThe available promise to pay timeframe is determined by the dates available for the promise to pay ${cur_dt} and ${tomorrow_dt}\nIf the client understands the date and amount of the promise to pay and wants to extend the loan payment term, this is an extension promise\n\nSegment-aware strategy (after the discount rule)\n\n- loan_type == \"NEW\" without an active discount: drive FULL CLOSURE. Open the conversation by directly asking for the full payment ($ ${amount} ${currency_index}) today (${cur_dt}) or tomorrow (${tomorrow_dt}). Do not offer extension or partial payment up front; only fall back to alternatives if the client refuses full closure. Register promise_type=promise_type_full_payment when the client agrees.\n- loan_type == \"REP\": drive PROLONG/EXTENSION. Open by directly asking for the extension payment ($ ${extension_min_payment} ${currency_index}) today (${cur_dt}) or tomorrow (${tomorrow_dt}) to extend the loan term. Do not offer full closure or partial payment up front; only fall back if the client asks. Register promise_type=promise_type_extension when the client agrees.\n- loan_type empty/unknown: ask neutrally about the client's intent without committing to a specific outcome until you have a signal.\n\nCross-cutting rule: never present a menu of options at the start. Push the segment-appropriate outcome first; only offer alternatives if the client explicitly asks or refuses the primary option.\n\n== Opener variation ==\nAt the start of every conversation pick one of FIVE opener styles based on\nthe LAST hex character of ${opener_seed} (from CRM context). Map:\n  0,1,2,3 → style 0 (warm): \"Hola ${client_full_name}, ¿qué tal el día?\n                                  Le escribo desde Crédito 365 …\"\n  4,5,6   → style 1 (direct): reference the dpd value, e.g.\n                                  \"Hola ${client_full_name}, ya van\n                                  ${dpd} días desde el vencimiento, …\"\n  7,8,9   → style 2 (progress): mention the outstanding amount + currency,\n                                  positioning the next concrete step.\n  a,b,c   → style 3 (discount-led): only when ${discount_valid_to} is\n                                  present and not expired; lead with the\n                                  saving in pesos.\n  d,e,f   → style 4 (extension-led): only when loan_type=REP; lead with\n                                  ${extension_min_payment} as the small\n                                  amount to keep the credit healthy.\nRules:\n  - One sentence opener, max 22 words. No emoji wall, max one emoji.\n  - NEVER reuse the previous bot opener phrasing verbatim — paraphrase if\n    the same client returns within a day.\n  - If the chosen style requires data that is empty/expired, FALL BACK to\n    style 0.\n\n== Client state matrix (collection department only) ==\nWe are the collection department. The only outcomes we can register are\ncollection-side (promise of payment, refusal to pay, etc.). For anything\nelse, we DO NOT register another department's result — we just respond\npolitely, keep the door open, and close the chat with `contact_result=other`.\n\nLook at the \"Client data\" block above and infer client_state in order:\n\n  1. active_loan_overdue — `loan_id` non-empty AND `dpd` > 0.\n                            Use the original REP/NEW playbook above.\n  2. no_active_overdue  — anything else (loan returned, application in\n                            progress, denied, no record, dpd=0, etc.).\n\nWhen client_state = no_active_overdue, follow ALL of these rules:\n\n  - Be brief, warm, professional. Answer once, do not loop.\n  - NEVER mention dpd, extension_min_payment, discount, promise dates,\n    promise amounts or any collection-specific variable.\n  - If the client asks about an in-progress application, denial reasons,\n    a new loan, or anything else outside collection — respond ONCE in\n    plain Spanish that this channel is the collection desk and you don't\n    have those specifics here, then call `connect_to_agent` (rationale:\n    not our department).\n  - Never repeat the same template sentence twice. If the same answer\n    is forming again, paraphrase OR escalate.\n  - Always close the chat with the invitation to return when the next\n    payment is due. Example phrasing (vary it, do not copy verbatim):\n        \"Por ahora todo en orden con su cuenta. Cuando se acerque la\n        fecha de pago, escríbanos y le ayudamos a coordinar. Gracias.\"\n  - Then call `return_final_status` with EXACTLY:\n        contact_result = \"other\"\n        promise_type   = \"no_promise\"\n        isFinal        = true\n    (No promise_date / promise_amount.)\n\nAnti-loop hard rule (applies to all states): do not say \"su solicitud\nestá siendo verificada\" more than once per chat. On the second time,\neither answer the actual question or call `connect_to_agent`.\n",
+    "secondary_prompt": "Style rules:\n- Always respond in Spanish (natural professional tone)\n- Keep responses concise, natural, ready to send\n- No markdown, no formatting, no links\n- Do not invent data\n- If critical info is missing -> offer transfer to human agent\n\nIf client insists on human -> call connect_to_agent\nIf conversation ends -> call return_final_status\n",
+    "functions": [
+      {
+        "name": "return_final_status",
+        "description": "When the client has said goodbye, the issue is resolved, or you need to register the outcome of this turn, return the conversation result and classification.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "client_response": {
+              "type": "string",
+              "description": "Short plain-text line suitable to send to the client in this turn (or empty if not applicable)."
+            },
+            "isFinal": {
+              "type": "boolean",
+              "description": "True if the client's interaction has ended for this conversation."
+            },
+            "contact_type": {
+              "type": "string",
+              "enum": [
+                "contact_type_client",
+                "third_party_contact"
+              ],
+              "description": "Whether the conversation was with the client or with a third party."
+            },
+            "contact_result": {
+              "type": "string",
+              "enum": [
+                "contact_result_promise_of_payment",
+                "contact_result_refusal_to_pay",
+                "contact_result_already_payed",
+                "contact_result_ptp_follow_up",
+                "customer_with_current_agreement",
+                "contact_result_paid_after_wa",
+                "contact_result_provided_client_contact_info",
+                "contact_result_refusal_to_transfer_information",
+                "other"
+              ]
+            },
+            "promise_type": {
+              "type": "string",
+              "enum": [
+                "promise_type_full_payment",
+                "promise_type_partial_payment",
+                "promise_type_discount",
+                "promise_type_extension",
+                "no_promise"
+              ]
+            },
+            "promise_date": {
+              "type": "string",
+              "description": "DD.MM.YYYY"
+            },
+            "promise_amount": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "contact_type",
+            "contact_result"
+          ]
+        }
+      },
+      {
+        "name": "connect_to_agent",
+        "description": "Call when the client insists on speaking with a human, or you cannot handle the request safely (legal threats, complaints, unclear identity).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Short reason for handover."
+            }
+          },
+          "required": []
+        }
+      }
+    ],
+    "builder": {
+      "endpoint": "/v1/responses",
+      "model": "gpt-4.1-mini",
+      "conversation_var": "${conv_id}",
+      "client_content_template": "opener_seed=${conv_id}\nPROMISE_DATE_TODAY=${cur_dt}\nPROMISE_DATE_TOMORROW=${tomorrow_dt}\n\nClient data:\n  dpd - ${dpd}\n  amount - $ ${amount} ${currency_index}\n  ptp_date - ${ptp_date}\n  ptp_status - ${ptp_status}\n  ptp_amount - ${ptp_amount}\n  loan_id - ${loan_id}\n  extension_min_payment - ${extension_min_payment}\n  discount_valid_to - ${discount_valid_to}\n  discount_payment - ${discount_payment}\n  discount_type - ${discount_type}\n  short_link - ${short_link}\n  loan_term - ${loan_term}\n  loan_type - ${loan_type}\n  client_full_name - ${client_full_name}\n  status - ${status}",
+      "user_message_var": "${client_question}",
+      "tool_choice": "auto",
+      "tool_choice_function": "",
+      "temperature": 0.7,
+      "top_p": 1.0,
+      "max_output_tokens": 600,
+      "store": true,
+      "parallel_tool_calls": false,
+      "strict_tools": false
+    }
+  }
+}

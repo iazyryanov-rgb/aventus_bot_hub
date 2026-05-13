@@ -139,6 +139,120 @@ ACTIVE_PHONE_DPD90_QUERIES: dict[str, Callable[[Company], Optional[str]]] = {
 }
 
 
+def _mysql_find_phone_by_criteria(
+    company: Company,
+    db_name: str,
+    *,
+    dpd: Optional[int],
+    status_code: Optional[int],
+    is_renewal: Optional[bool],
+) -> Optional[str]:
+    """Generic CO/CO2 (Aventus MySQL schema) search by loan attributes.
+
+    Any of dpd / status_code / is_renewal may be None to skip that clause.
+
+    Note: `loan` has no native `is_renewal` flag — the CRM HTTP API derives
+    NEW/REP by checking whether the user has any prior loan. We mirror that
+    via an EXISTS subquery: REP ⇔ user has at least one earlier loan record.
+
+    Returns the latest matching user's `main_phone_number` (digits) or None.
+    """
+    conds = [
+        "u.main_phone_number IS NOT NULL",
+        "u.main_phone_number != ''",
+    ]
+    params: list = []
+    if dpd is not None:
+        conds.append("l.daysLate = %s")
+        params.append(int(dpd))
+    if status_code is not None:
+        conds.append("l.status = %s")
+        params.append(int(status_code))
+    if is_renewal is True:
+        conds.append(
+            f"EXISTS (SELECT 1 FROM `{db_name}`.loan l2 "
+            "WHERE l2.userId = l.userId AND l2.id < l.id)"
+        )
+    elif is_renewal is False:
+        conds.append(
+            f"NOT EXISTS (SELECT 1 FROM `{db_name}`.loan l2 "
+            "WHERE l2.userId = l.userId AND l2.id < l.id)"
+        )
+    where_sql = " AND ".join(conds)
+
+    conn = _open_for(company)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT u.main_phone_number "
+                f"FROM `{db_name}`.loan l "
+                f"JOIN `{db_name}`.user u ON l.userId = u.id "
+                f"WHERE {where_sql} "
+                f"ORDER BY l.id DESC LIMIT 1",
+                tuple(params),
+            )
+            row = cur.fetchone()
+            return str(row[0]) if row else None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+CRM_DB_NAME_BY_COMPANY: dict[str, str] = {
+    "CO_": "prod_credito365_api",
+    "CO2_": "prod_tuparcero_api",
+}
+
+
+def find_client_phone_by_criteria(
+    company: Company,
+    *,
+    dpd: Optional[int],
+    loan_status: Optional[int],
+    client_type: Optional[str],  # "NEW" | "REP" | None
+) -> tuple[Optional[str], Optional[str]]:
+    """Look up a CRM client matching the (dpd, loan_status, client_type)
+    criteria — used by the testers UI to pick a realistic phone to use as
+    `destination` for a tester profile.
+
+    Returns (phone, error_message). On success `error_message` is None.
+    """
+    db_name = CRM_DB_NAME_BY_COMPANY.get(company.key)
+    if not db_name:
+        return None, (
+            f"CRM search by criteria not configured for {company.key.rstrip('_')}"
+        )
+    info = load_raw().get(company.key, {})
+    port_str = str(info.get("crm_db_port") or "").strip()
+    if not port_str:
+        return None, "В компании не задан CRM DB port"
+    try:
+        int(port_str)
+    except ValueError:
+        return None, f"CRM DB port должен быть числом ({port_str!r})"
+    if (info.get("crm_db_engine") or "mysql").lower() != "mysql":
+        return None, f"Engine {info.get('crm_db_engine')} пока не поддержан"
+    is_renewal: Optional[bool] = None
+    if client_type:
+        ct = client_type.strip().upper()
+        if ct == "NEW":
+            is_renewal = False
+        elif ct == "REP":
+            is_renewal = True
+    try:
+        phone = _mysql_find_phone_by_criteria(
+            company, db_name,
+            dpd=dpd, status_code=loan_status, is_renewal=is_renewal,
+        )
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if not phone:
+        return None, "Не найден клиент по заданным условиям"
+    return phone, None
+
+
 def fetch_active_loan_phone_dpd90(
     company: Company,
 ) -> tuple[Optional[str], Optional[str]]:

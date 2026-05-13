@@ -178,3 +178,99 @@ class AnthropicAuditClient:
                 "model": model,
             }
         return data
+
+    def translate_batch(
+        self,
+        texts: list[str],
+        target_lang: str = "Russian",
+        timeout_s: float = 60.0,
+    ) -> list[str]:
+        """Translate a batch of short messages via Sonnet. Returns a list of
+        the same length as `texts`; empty inputs map to empty outputs.
+
+        We send all messages in a single user turn with explicit numeric
+        markers so the model returns N translations in matching order. JSON
+        schema output guarantees the array shape.
+        """
+        if not texts:
+            return []
+        client = self._ensure_client()
+        try:
+            import anthropic  # noqa: WPS433
+        except ImportError as exc:
+            raise AnthropicError(str(exc)) from exc
+
+        items = []
+        for i, t in enumerate(texts):
+            items.append({"i": i, "src": t or ""})
+        user_text = (
+            f"Translate each `src` field into {target_lang}. Preserve meaning "
+            f"and tone of WhatsApp/chat messages — keep links, emojis, and "
+            f"variable placeholders untouched. Return JSON {{\"items\":["
+            f"{{\"i\":<int>,\"out\":\"<translation>\"}}, ...]}} with the same "
+            f"`i` values and same length.\n\nINPUT:\n"
+            + json.dumps({"items": items}, ensure_ascii=False)
+        )
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "i": {"type": "integer"},
+                            "out": {"type": "string"},
+                        },
+                        "required": ["i", "out"],
+                    },
+                }
+            },
+            "required": ["items"],
+        }
+
+        try:
+            with client.with_options(timeout=timeout_s).messages.stream(
+                model=MODEL_SONNET,
+                max_tokens=8000,
+                output_config={
+                    "format": {"type": "json_schema", "schema": schema},
+                },
+                system=[{
+                    "type": "text",
+                    "text": (
+                        "You are a precise translator for short customer-"
+                        "service chat messages between Spanish/English and "
+                        f"{target_lang}. Always return the requested JSON."
+                    ),
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=[{"role": "user", "content": user_text}],
+            ) as stream:
+                final = stream.get_final_message()
+        except anthropic.APIStatusError as exc:
+            raise AnthropicError(
+                f"HTTP {exc.status_code}: {getattr(exc, 'message', exc)}"
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            raise AnthropicError(f"Сеть: {exc}") from exc
+        except Exception as exc:
+            raise AnthropicError(f"{type(exc).__name__}: {exc}") from exc
+
+        text = next(
+            (b.text for b in final.content if getattr(b, "type", "") == "text"),
+            "",
+        )
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise AnthropicError(f"Не-JSON ответ перевода: {exc}") from exc
+        out_by_i: dict[int, str] = {}
+        for it in (data.get("items") or []):
+            try:
+                out_by_i[int(it.get("i"))] = str(it.get("out") or "")
+            except (TypeError, ValueError):
+                continue
+        return [out_by_i.get(i, "") for i in range(len(texts))]

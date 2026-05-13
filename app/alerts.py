@@ -28,6 +28,7 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("wa_senders_health",     "📡 WA Senders · health (Infobip)",         "Поллит Infobip /whatsapp/2/senders по нашему гейтвею. Алерт при понижении quality (HIGH→MEDIUM/LOW) или лимита (UNLIMITED↓100K↓10K↓2K↓250) и при переходе статуса в BANNED/RESTRICTED/RATE_LIMITED/FLAGGED/DELETED. INFO-изменения (новый сендер, recovery) видны в панели «Сендеры», в TG не уходят. Первый запуск — тихо сохраняет baseline. Запуск раз в 30 минут."),
     ("cohort_imbalance",      "⚖️ A/B router cohort imbalance",           "Сравнивает фактическую долю candidate-когорты (digits 0,1,2 по умолчанию) с ожидаемыми 30%. Алерт при отклонении ≥15pp — router сломан или gate сменили. Запуск раз в час."),
     ("crm_call_list_failed",  "📞 Коллист · ошибка отправки",             "Поллит CRM-таблицу dialer_process (Lendi-движок: AR/PE): алерт по новым строкам со state='error'. В сообщение идут campaign name, process id и last_error. Throttle через high-water mark по updated_at — каждый сбой репортится один раз."),
+    ("wa_send_time_recommendation", "🕒 WA · лучшее время рассылки",       "Раз в сутки анализирует за последние 30 дней, в какие часы клиенты чаще всего открывают чат с ботом (= отвечают на mass-WA). Возвращает топ-3 часа отправки + ASCII-heatmap по часам. Запуск: «Раз в сутки» (рекомендуется ночь)."),
 ]
 
 ALERT_TEMPLATE_BY_SLUG = {slug: (slug, title, desc) for slug, title, desc in ALERT_TEMPLATES}
@@ -355,6 +356,30 @@ DEFAULT_AI_AUDIT_ALERTS: list[dict] = [
 ]
 
 
+# Phase II — daily recommendation when to send mass-WA (analyses
+# response-by-hour over last 30 days). Cheap and informative; safe to
+# enable on every WA-equipped tenant. Builder lives in
+# `scheduler._build_wa_send_time_recommendation_text` and falls back to
+# None if Grafana/Postgres isn't configured for the company, so it's
+# safe to register everywhere.
+DEFAULT_WA_SEND_TIME_ALERTS: list[dict] = [
+    {
+        "name": "WA · лучшее время рассылки · daily",
+        "template": "wa_send_time_recommendation",
+        "schedule": "Раз в сутки",
+        "trigger_mode": "time",
+        "working_hours_only": False,
+        "start_time": "08:00",
+        "enabled": True,
+        "notes": (
+            "Авто: каждый день в 08:00 ищет в Webitel-чатах за 30 дней "
+            "топ-3 часа отклика клиента на mass-WA. Рекомендация "
+            "уходит в тему компании в Telegram с ASCII-heatmap."
+        ),
+    },
+]
+
+
 # Phase H — health-check alerts. Every WA-enabled company gets these by
 # default; they are cheap and the auto-pause hooks keep accidents
 # contained. Cohort-imbalance only fires once an A/B router is present
@@ -448,6 +473,26 @@ def ensure_default_ai_audit_alerts(company_keys: list[str]) -> None:
         wa = co.setdefault("whatsapp", [])
         existing_templates = {a.get("template") for a in wa}
         for tpl in DEFAULT_AI_AUDIT_ALERTS:
+            if tpl["template"] in existing_templates:
+                continue
+            wa.append({**tpl, "id": secrets.token_hex(8)})
+            changed = True
+    if changed:
+        save_alerts_config(cfg)
+
+
+def ensure_default_wa_send_time_alerts(company_keys: list[str]) -> None:
+    """Idempotently inject DEFAULT_WA_SEND_TIME_ALERTS into
+    bot_alerts[<key>]['whatsapp']. Skips if the same template already
+    exists for that company so user edits are preserved."""
+    cfg = load_alerts_config()
+    bot_alerts = cfg.setdefault("bot_alerts", {})
+    changed = False
+    for key in company_keys:
+        co = bot_alerts.setdefault(key, {})
+        wa = co.setdefault("whatsapp", [])
+        existing_templates = {a.get("template") for a in wa}
+        for tpl in DEFAULT_WA_SEND_TIME_ALERTS:
             if tpl["template"] in existing_templates:
                 continue
             wa.append({**tpl, "id": secrets.token_hex(8)})

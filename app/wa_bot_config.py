@@ -32,7 +32,7 @@ CO_CRM_LOOKUP_VARS: list[dict] = [
     {"local": "ptp_amount",            "remote": "ptp_amount"},
     {"local": "loan_id",               "remote": "loan_id"},
     {"local": "discount_valid_to",     "remote": "discount_valid_until"},
-    {"local": "discounted_payment",    "remote": "discounted_payment_amount"},
+    {"local": "discount_payment",      "remote": "discounted_payment_amount"},
     {"local": "discount_type",         "remote": "discount_type"},
     {"local": "extension_min_payment", "remote": "extension_amount"},
     {"local": "loan_type",             "remote": "loan_type"},
@@ -48,7 +48,7 @@ CO_RESULT_BODY_FIELDS: list[dict] = [
     {"key": "collector_id",   "value": "${collector_id}"},
     {"key": "call_type",      "value": "${crm_call_type}"},
     {"key": "contact_type",   "value": "${contact_type}"},
-    {"key": "direction",      "value": "direction_incoming"},
+    {"key": "direction",      "value": "wa_bot_inbound"},
     {"key": "contact_result", "value": "${contact_result}"},
     {"key": "comment",        "value": "${chat_log}"},
     {"key": "phone_number",   "value": "${destination}"},
@@ -88,6 +88,14 @@ Promise to Pay Rules
 If the client understands the date and amount of their promise to pay and wants to close the loan, this is a full payment promise.
 The available promise to pay timeframe is determined by the dates available for the promise to pay ${cur_dt} and ${tomorrow_dt}
 If the client understands the date and amount of the promise to pay and wants to extend the loan payment term, this is an extension promise
+
+Segment-aware strategy (after the discount rule)
+
+- loan_type == "NEW" without an active discount: drive FULL CLOSURE. Open the conversation by directly asking for the full payment ($ ${amount} ${currency_index}) today (${cur_dt}) or tomorrow (${tomorrow_dt}). Do not offer extension or partial payment up front; only fall back to alternatives if the client refuses full closure. Register promise_type=promise_type_full_payment when the client agrees.
+- loan_type == "REP": drive PROLONG/EXTENSION. Open by directly asking for the extension payment ($ ${extension_min_payment} ${currency_index}) today (${cur_dt}) or tomorrow (${tomorrow_dt}) to extend the loan term. Do not offer full closure or partial payment up front; only fall back if the client asks. Register promise_type=promise_type_extension when the client agrees.
+- loan_type empty/unknown: ask neutrally about the client's intent without committing to a specific outcome until you have a signal.
+
+Cross-cutting rule: never present a menu of options at the start. Push the segment-appropriate outcome first; only offer alternatives if the client explicitly asks or refuses the primary option.
 """
 
 

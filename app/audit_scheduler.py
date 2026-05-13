@@ -427,10 +427,33 @@ def format_weekly_review_summary(
         f"close={_fmt_pct(cand.close_rate)} · "
         f"prolong={_fmt_pct(cand.prolong_rate)} · "
         f"bot_only={_fmt_pct(cand.bot_only_rate)}",
-        "",
-        f"{icon} <b>Decision: {'PROMOTE' if decision.promote else 'KEEP'}</b>",
-        f"<i>{_esc(decision.reason)}</i>",
     ]
+    # Per-segment breakdown — NEW (close metric) and REP (prolong metric)
+    # are the two business goals. `unknown` is shown only when material so
+    # the operator notices CRM lookup failures.
+    cseg = getattr(m, "champion_segments", None)
+    dseg = getattr(m, "candidate_segments", None)
+    if cseg is not None and dseg is not None:
+        lines.append("")
+        lines.append("<b>Per-segment</b> (champion → candidate):")
+        lines.append(
+            f"• NEW (close): "
+            f"{_fmt_pct(cseg.new.close_rate)} → {_fmt_pct(dseg.new.close_rate)} "
+            f"· n {cseg.new.with_payment_data}/{dseg.new.with_payment_data}"
+        )
+        lines.append(
+            f"• REP (prolong): "
+            f"{_fmt_pct(cseg.rep.prolong_rate)} → {_fmt_pct(dseg.rep.prolong_rate)} "
+            f"· n {cseg.rep.with_payment_data}/{dseg.rep.with_payment_data}"
+        )
+        if cseg.unknown.n or dseg.unknown.n:
+            lines.append(
+                f"• unknown: champ_n={cseg.unknown.n} cand_n={dseg.unknown.n} "
+                "(CRM lookup failed — investigate)"
+            )
+    lines.append("")
+    lines.append(f"{icon} <b>Decision: {'PROMOTE' if decision.promote else 'KEEP'}</b>")
+    lines.append(f"<i>{_esc(decision.reason)}</i>")
     if decision.promote:
         lines.append("")
         lines.append(

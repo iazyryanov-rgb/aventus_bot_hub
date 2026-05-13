@@ -1,48 +1,48 @@
 {
-    "default_tester_id":  "Ivan_Zyrianov_00096386",
-    "testers":  [
-                    {
-                        "id":  "qa_alt",
-                        "display_name":  "QA дополнительный",
-                        "phone_e164":  "+573009998877",
-                        "destination":  "3009998877",
-                        "environment":  "staging"
-                    },
-                    {
-                        "id":  "Jose_David_Naranjo_Bedoya_46365003",
-                        "display_name":  "Jose David Naranjo Bedoya",
-                        "phone_e164":  "+573146365003",
-                        "destination":  "573146365003",
-                        "company":  "Credito365",
-                        "test_owner_key":  "Jose David Naranjo Bedoya",
-                        "notes":  "Из catalog.json (блок testers.people, WhatsApp / справочник)"
-                    },
-                    {
-                        "id":  "Pablo_Andrés_Gonzales_Balbutin_22562287",
-                        "display_name":  "Pablo Andrés Gonzales Balbutin",
-                        "phone_e164":  "+573122562287",
-                        "destination":  "573122562287",
-                        "company":  "Credito365",
-                        "test_owner_key":  "Pablo Andrés Gonzales Balbutin",
-                        "notes":  "Из catalog.json (блок testers.people, WhatsApp / справочник)"
-                    },
-                    {
-                        "id":  "Ivan_Zyrianov_00096386",
-                        "display_name":  "Ivan Zyrianov",
-                        "phone_e164":  "+79100096386",
-                        "destination":  "79100096386",
-                        "company":  "Credito365",
-                        "test_owner_key":  "Ivan Zyrianov",
-                        "notes":  "Из catalog.json (блок testers.people, WhatsApp / справочник)"
-                    },
-                    {
-                        "id":  "Juan_Fernando_Vargas_Garces_159753",
-                        "display_name":  "Juan Fernando Vargas Garces",
-                        "phone_e164":  "+57159753",
-                        "destination":  "159753",
-                        "company":  "Credito365",
-                        "test_owner_key":  "Juan Fernando Vargas Garces",
-                        "notes":  "Из catalog.json (блок testers.people, WhatsApp / справочник)"
-                    }
-                ]
+    "default_tester_id": "Ivan_Zyrianov_00096386",
+    "testers": [
+        {
+            "id": "qa_alt",
+            "display_name": "QA дополнительный",
+            "phone_e164": "+573009998877",
+            "destination": "3009998877",
+            "environment": "staging"
+        },
+        {
+            "id": "Jose_David_Naranjo_Bedoya_46365003",
+            "display_name": "Jose David Naranjo Bedoya",
+            "phone_e164": "+573146365003",
+            "destination": "573146365003",
+            "company": "Credito365",
+            "test_owner_key": "Jose David Naranjo Bedoya",
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+        },
+        {
+            "id": "Pablo_Andrés_Gonzales_Balbutin_22562287",
+            "display_name": "Pablo Andrés Gonzales Balbutin",
+            "phone_e164": "+573122562287",
+            "destination": "573122562287",
+            "company": "Credito365",
+            "test_owner_key": "Pablo Andrés Gonzales Balbutin",
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+        },
+        {
+            "id": "Ivan_Zyrianov_00096386",
+            "display_name": "Ivan Zyrianov",
+            "phone_e164": "+79100096386",
+            "destination": "573103756093",
+            "company": "Credito365",
+            "test_owner_key": "Ivan Zyrianov",
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+        },
+        {
+            "id": "Juan_Fernando_Vargas_Garces_159753",
+            "display_name": "Juan Fernando Vargas Garces",
+            "phone_e164": "+57159753",
+            "destination": "159753",
+            "company": "Credito365",
+            "test_owner_key": "Juan Fernando Vargas Garces",
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+        }
+    ]
 }

@@ -76,6 +76,15 @@ OUTPUT_SCHEMA: dict = {
                         "type": "string",
                         "enum": [
                             "prompt", "function", "enum", "flow", "data",
+                            # Phase-II finding kinds — see ROLE_AND_GLOSSARY:
+                            "crm_field",         # бот не знал что-то, что есть в CRM
+                            "schema_drift",      # mapping ≠ prod/candidate schema
+                            "compliance",        # бот нарушает запреты (police/jail/…)
+                            "dropoff",           # клиенты массово отваливаются в узле X
+                            "ab_compare",        # candidate делает что-то лучше/хуже champion
+                            "function_hygiene",  # функции дёргаются с мусорными аргументами
+                            "stage_segment",     # REP/NEW/late требуют разного скрипта
+                            "sentiment",         # бот сам триггерит конфликт
                         ],
                     },
                     "evidence_chat_ids": {
@@ -115,7 +124,20 @@ OUTPUT_SCHEMA: dict = {
                     },
                     "kind": {
                         "type": "string",
-                        "enum": ["text", "structural"],
+                        "enum": [
+                            "text", "structural",
+                            "crm_field_add",      # добавить новую переменную в crm_lookup_vars
+                            "schema_patch",       # править Webitel-схему (prod/candidate)
+                        ],
+                    },
+                    "crm_field_add": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "local":       {"type": "string"},
+                            "remote":      {"type": "string"},
+                            "why_needed":  {"type": "string"},
+                        },
                     },
                 },
             },
@@ -204,7 +226,41 @@ ROLE_AND_GLOSSARY = (
     "express the same idea as a `text` change when possible.\n"
     "\n"
     "Be brief and high-signal. Do not invent statistics. If sample size is "
-    "too small for a finding, mark it severity=low."
+    "too small for a finding, mark it severity=low.\n"
+    "\n"
+    "== Phase-II finding kinds (use when the evidence justifies; otherwise "
+    "stick to prompt/function/enum/flow/data) ==\n"
+    "  - `crm_field` — клиент задаёт вопрос или ведёт диалог, на который "
+    "бот не смог ответить, потому что у него не было данных в "
+    "`crm_lookup_vars`. Пример: клиент спрашивает «у меня есть скидка», а "
+    "в маппинге нет `discount_*`. В рекомендации используй "
+    "`kind=crm_field_add` и обязательно заполни `crm_field_add` объект "
+    "{`local`, `remote`, `why_needed`} — это новая пара переменных, "
+    "которую надо добавить в `crm_lookup_vars`.\n"
+    "  - `schema_drift` — расхождение между локальным маппингом и "
+    "реальной Webitel-схемой (prod / candidate). Контекст в "
+    "`MAPPING_DRIFT` секции. Severity=high когда поле меняет семантику "
+    "(direction, call_type), severity=medium для опечаток в значениях. "
+    "В рекомендации используй `kind=schema_patch`.\n"
+    "  - `compliance` — бот говорит запрещённое (police / jail / "
+    "коллекторские угрозы) или клиент жалуется на тон. Список запретов — "
+    "в `FORBIDDEN_PHRASES`. Severity=high.\n"
+    "  - `dropoff` — клиенты массово прерывают диалог в одном и том же "
+    "узле action-tree (см. `tree_path` чатов). Назвать узел (по индексу "
+    "пути или последней метке) и предложить чем заменить шаг.\n"
+    "  - `ab_compare` — у champion и candidate чатов разный исход на "
+    "одинаковых вопросах. Каждый чат маркирован `arm` "
+    "(`champion`/`candidate`). Рекомендация — что из кандидата перенести "
+    "в champion (или наоборот). Severity по lift'у.\n"
+    "  - `function_hygiene` — функция (например `return_final_status`) "
+    "вызывается с пустыми/нелогичными аргументами (`promise_amount` без "
+    "`promise_date`, `contact_result=promise_of_payment` без "
+    "`promise_type`). Рекомендуй ужесточение enum-описаний или required.\n"
+    "  - `stage_segment` — REP-клиентам (`is_renewal=true`) бот говорит "
+    "как с NEW-клиентами и наоборот, теряя конверсию. Конкретный сегмент "
+    "+ конкретная правка.\n"
+    "  - `sentiment` — бот сам триггерит эскалацию: формальный тон, "
+    "повторяемая фраза в ответ на возражение, etc. Цитируй чат_id и фразу.\n"
 )
 
 
@@ -265,12 +321,166 @@ def build_system_prompt(company: Company, lang: str = "ENG") -> str:
         ROLE_AND_GLOSSARY,
         _company_context(company),
         _bot_config_snapshot(company),
+        _phase2_context(company),
         _lang_block(lang),
     ]
     return "\n\n".join(parts)
 
 
-def build_user_prompt(records: list[ChatRecord], data_meta: dict) -> str:
+# ---------------------------------------------------------------------------
+# Phase-II context — CRM vars, mapping drift, compliance, A/B config.
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_PHRASES_ES = [
+    "arresto", "cárcel", "carcel", "prisión", "prision", "policía", "policia",
+    "embargo", "denuncia penal", "represalia", "demanda judicial",
+    # ENG fall-backs (some bots leak English):
+    "arrest", "jail", "police", "lawsuit", "prison",
+]
+
+
+def _phase2_context(company: Company) -> str:
+    """Inject mapping / drift / compliance / A/B context for Phase-II
+    finding kinds."""
+    parts: list[str] = []
+
+    cfg = load_config(company.key)
+
+    # 1) crm_lookup_vars — список переменных, которые бот уже умеет.
+    vars_list = cfg.get("crm_lookup_vars") or []
+    if vars_list:
+        parts.append(
+            "CRM LOOKUP VARS (what the bot already pulls from CRM by phone):\n"
+            + json.dumps(vars_list, ensure_ascii=False, indent=2)
+        )
+
+    # 2) Mapping ↔ Webitel schema drift.
+    drift = _compute_drift(company, cfg)
+    if drift is not None:
+        parts.append(
+            "MAPPING DRIFT (mapping vs live prod/candidate schemas in Webitel):\n"
+            + json.dumps(drift, ensure_ascii=False, indent=2)
+        )
+
+    # 3) Compliance — forbidden phrases.
+    parts.append(
+        "FORBIDDEN PHRASES (the bot must never use):\n"
+        + ", ".join(_FORBIDDEN_PHRASES_ES)
+    )
+
+    # 4) A/B router config — digits routed to candidate.
+    try:
+        from .router_schema import _candidate_digits_for
+        digits = _candidate_digits_for(company.key)
+    except Exception:
+        digits = []
+    if digits:
+        parts.append(
+            "A/B ROUTER CONFIG:\n"
+            f"  Candidate digits: {sorted(digits)} (phones ending in these "
+            f"go to candidate schema; rest → champion). Each chat in the "
+            f"user prompt carries `arm` ∈ {{champion, candidate}} computed "
+            f"from the same rule. Use this to build `ab_compare` findings."
+        )
+
+    return "\n\n".join(parts) if parts else ""
+
+
+def _compute_drift(company: Company, cfg: dict) -> Optional[dict]:
+    """Pull prod + candidate POST signatures from Webitel and diff against
+    mapping. Returns a compact dict suitable for the prompt; None on error.
+    """
+    try:
+        from .data import load_raw
+        from .webitel import WebitelClient
+        from .wa_bot_config import get_candidate_schema, get_prod_schema
+    except Exception:
+        return None
+    info = load_raw().get(company.key, {}) or {}
+    host = (info.get("webitel_host") or "").strip()
+    tok = (info.get("webitel_access_token") or "").strip()
+    if not host or not tok:
+        return None
+    _, prod_id = get_prod_schema(company.key)
+    _, cand_id = get_candidate_schema(company.key)
+    if not prod_id:
+        return None
+    client = WebitelClient(host, tok)
+
+    def _extract(schema_obj: dict) -> dict:
+        payload = schema_obj.get("payload") or {}
+        for n in payload.get("nodes") or []:
+            sch = n.get("schema") or {}
+            url = sch.get("url") or ""
+            if "robot_phone_result" in url:
+                data_s = sch.get("data") or ""
+                try:
+                    fields = json.loads(data_s) if data_s else {}
+                except json.JSONDecodeError:
+                    import re as _re
+                    fields = {}
+                    for m in _re.finditer(r'"([^"]+)"\s*:\s*"([^"]*)"', data_s):
+                        fields[m.group(1)] = m.group(2)
+                return {"url": url, "fields": fields}
+        return {"url": "", "fields": {}}
+
+    try:
+        prod_sig = _extract(client.get_schema(int(prod_id)))
+    except Exception:
+        return None
+    cand_sig = None
+    if cand_id:
+        try:
+            cand_sig = _extract(client.get_schema(int(cand_id)))
+        except Exception:
+            cand_sig = None
+
+    mapping_fields = {
+        f.get("key", ""): f.get("value", "")
+        for f in (cfg.get("result_post_fields") or [])
+    }
+    mapping_url = cfg.get("result_post_url") or ""
+
+    diffs = []
+    all_keys = (
+        set(mapping_fields)
+        | set(prod_sig.get("fields") or {})
+        | set((cand_sig or {}).get("fields") or {})
+    )
+    for k in sorted(all_keys):
+        m = mapping_fields.get(k, "")
+        p = (prod_sig.get("fields") or {}).get(k, "")
+        c = (cand_sig.get("fields") or {}).get(k, "") if cand_sig else None
+        ok = (m == p) and (c is None or m == c)
+        if ok:
+            continue
+        diffs.append({
+            "field": k,
+            "mapping": m, "prod": p,
+            "cand": c if c is not None else "(no candidate)",
+        })
+
+    url_ok = (mapping_url == prod_sig.get("url")) and (
+        cand_sig is None or mapping_url == cand_sig.get("url")
+    )
+
+    return {
+        "prod_schema_id": prod_id,
+        "candidate_schema_id": cand_id,
+        "url_ok": url_ok,
+        "url_mapping": mapping_url,
+        "url_prod": prod_sig.get("url"),
+        "url_cand": cand_sig.get("url") if cand_sig else None,
+        "field_diffs": diffs,
+        "all_ok": (url_ok and not diffs),
+    }
+
+
+def build_user_prompt(
+    records: list[ChatRecord],
+    data_meta: dict,
+    candidate_digits: Optional[set[str]] = None,
+) -> str:
     header = {
         "audit_request": "loan_outcome_audit",
         "data_meta": data_meta,
@@ -279,12 +489,23 @@ def build_user_prompt(records: list[ChatRecord], data_meta: dict) -> str:
             "outcomes by `payment.classification` (REP→prolong is the win; "
             "NEW→close is the win; both can land in 'partial'). Compare the "
             "language and flow of chats with `paid=true` vs `paid=false`. "
-            "Return findings + recommendations per the schema."
+            "Return findings + recommendations per the schema. Each chat "
+            "carries `arm` (`champion`/`candidate`/`unknown`) — leverage it "
+            "for `ab_compare` findings when outcomes differ."
         ),
     }
     lines = [json.dumps(header, ensure_ascii=False)]
+    cd = candidate_digits or set()
     for r in records:
-        lines.append(json.dumps(to_compact_dict(r), ensure_ascii=False))
+        d = to_compact_dict(r)
+        last = (r.phone_last_digit or "").strip()[-1:]
+        if not last:
+            d["arm"] = "unknown"
+        elif last in cd:
+            d["arm"] = "candidate"
+        else:
+            d["arm"] = "champion"
+        lines.append(json.dumps(d, ensure_ascii=False))
     return "\n".join(lines)
 
 
@@ -319,7 +540,12 @@ def run_audit(
         raise RuntimeError("За выбранный период чатов не нашлось.")
 
     system_text = build_system_prompt(company, lang=lang)
-    user_text = build_user_prompt(records, data_meta)
+    try:
+        from .router_schema import _candidate_digits_for
+        cand_digits = {str(d) for d in _candidate_digits_for(company.key)}
+    except Exception:
+        cand_digits = set()
+    user_text = build_user_prompt(records, data_meta, candidate_digits=cand_digits)
 
     client = AnthropicAuditClient(api_key=api_key)
     result = client.call_audit(

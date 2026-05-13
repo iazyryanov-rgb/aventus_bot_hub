@@ -33,7 +33,6 @@ class MainWindow(tk.Tk):
                 pass
 
         self.state("zoomed")
-        self.bind("<Escape>", lambda _e: self.destroy())
 
         self._right_content: Optional[tk.Widget] = None
         self._build_ui()

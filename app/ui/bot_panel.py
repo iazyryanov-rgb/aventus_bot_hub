@@ -22,10 +22,30 @@ class BotPanel(ttk.Frame):
             conversations = ConversationsPanel(self.notebook, company)
             self.notebook.add(conversations, text=t("tab_chats"))
 
+        if kind == "voice":
+            from .voice_bot_panel import (
+                VoiceBotMappingPanel,
+                VoiceBotOverviewPanel,
+                VoiceBotPromptsPanel,
+            )
+            self.notebook.add(
+                VoiceBotOverviewPanel(self.notebook, company),
+                text=t("wa_bot_tab_overview"),
+            )
+            self.notebook.add(
+                VoiceBotMappingPanel(self.notebook, company),
+                text=t("wa_bot_tab_mapping"),
+            )
+            self.notebook.add(
+                VoiceBotPromptsPanel(self.notebook, company),
+                text=t("wa_bot_tab_prompts"),
+            )
+
         if kind == "whatsapp":
             from .wa_bot_panel import (
                 WaBotBuilderPanel,
                 WaBotFunctionsPanel,
+                WaBotMappingPanel,
                 WaBotOverviewPanel,
                 WaBotPromptsPanel,
                 WaBotSendersPanel,
@@ -35,6 +55,10 @@ class BotPanel(ttk.Frame):
             self.notebook.add(
                 WaBotOverviewPanel(self.notebook, company),
                 text=t("wa_bot_tab_overview"),
+            )
+            self.notebook.add(
+                WaBotMappingPanel(self.notebook, company),
+                text=t("wa_bot_tab_mapping"),
             )
             self.notebook.add(
                 WaBotSendersPanel(self.notebook, company),

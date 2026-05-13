@@ -73,6 +73,23 @@ def _classify_cohort(record: ChatRecord, candidate_digits: set[int]) -> Optional
     return "candidate" if int(d) in candidate_digits else "champion"
 
 
+SEGMENTS = ("NEW", "REP", "unknown")
+
+
+def _classify_segment(record: ChatRecord) -> str:
+    """Map a chat to the client segment used in segment-aware promotion
+    decisions. NEW = first-time client (one open loan, no closed history),
+    REP = returning client (≥1 closed loan in history). The CRM exposes this
+    directly as `loan_type` ∈ {NEW, REP}; anything else is `unknown` and gets
+    a separate, neutral bucket."""
+    lt = ((record.crm or {}).get("loan_type") or "").strip().upper()
+    if lt == "NEW":
+        return "NEW"
+    if lt == "REP":
+        return "REP"
+    return "unknown"
+
+
 # --- Metrics ----------------------------------------------------------------
 
 @dataclass
@@ -147,6 +164,31 @@ def _compute_cohort_metrics(records: Iterable[ChatRecord]) -> CohortMetrics:
 # --- Top-level entrypoints --------------------------------------------------
 
 @dataclass
+class SegmentedMetrics:
+    """Per-segment slice of one cohort. Keys mirror SEGMENTS — `NEW`,
+    `REP`, `unknown`. NEW maps to the close_rate goal, REP to prolong_rate;
+    we keep `unknown` for visibility but never use it in PROMOTE decisions."""
+    new: CohortMetrics = field(default_factory=CohortMetrics)
+    rep: CohortMetrics = field(default_factory=CohortMetrics)
+    unknown: CohortMetrics = field(default_factory=CohortMetrics)
+
+    def get(self, segment: str) -> CohortMetrics:
+        s = (segment or "").upper()
+        if s == "NEW":
+            return self.new
+        if s == "REP":
+            return self.rep
+        return self.unknown
+
+    def to_dict(self) -> dict:
+        return {
+            "NEW": self.new.to_dict(),
+            "REP": self.rep.to_dict(),
+            "unknown": self.unknown.to_dict(),
+        }
+
+
+@dataclass
 class WeeklyMetrics:
     company_key: str
     since_ms: int
@@ -154,6 +196,8 @@ class WeeklyMetrics:
     candidate_digits: list[int]
     champion: CohortMetrics = field(default_factory=CohortMetrics)
     candidate: CohortMetrics = field(default_factory=CohortMetrics)
+    champion_segments: SegmentedMetrics = field(default_factory=SegmentedMetrics)
+    candidate_segments: SegmentedMetrics = field(default_factory=SegmentedMetrics)
     unclassified: int = 0  # chats without phone_last_digit
 
     def to_dict(self) -> dict:
@@ -164,6 +208,8 @@ class WeeklyMetrics:
             "candidate_digits": self.candidate_digits,
             "champion": self.champion.to_dict(),
             "candidate": self.candidate.to_dict(),
+            "champion_segments": self.champion_segments.to_dict(),
+            "candidate_segments": self.candidate_segments.to_dict(),
             "unclassified": self.unclassified,
         }
 
@@ -205,6 +251,16 @@ def compute_weekly_metrics(
         else:
             unclassified += 1
 
+    def _segmented(records: list[ChatRecord]) -> SegmentedMetrics:
+        buckets: dict[str, list[ChatRecord]] = {s: [] for s in SEGMENTS}
+        for rec in records:
+            buckets[_classify_segment(rec)].append(rec)
+        return SegmentedMetrics(
+            new=_compute_cohort_metrics(buckets["NEW"]),
+            rep=_compute_cohort_metrics(buckets["REP"]),
+            unknown=_compute_cohort_metrics(buckets["unknown"]),
+        )
+
     return WeeklyMetrics(
         company_key=company_key,
         since_ms=since_ms,
@@ -212,6 +268,8 @@ def compute_weekly_metrics(
         candidate_digits=sorted(digits),
         champion=_compute_cohort_metrics(champ_recs),
         candidate=_compute_cohort_metrics(cand_recs),
+        champion_segments=_segmented(champ_recs),
+        candidate_segments=_segmented(cand_recs),
         unclassified=unclassified,
     )
 
@@ -247,16 +305,26 @@ class PromoteDecision:
         }
 
 
-def _goal_rates(
-    metrics: WeeklyMetrics, target_goal: str,
-) -> tuple[float, float]:
-    g = (target_goal or "").lower()
+def _segment_rate(seg: CohortMetrics, goal: str) -> float:
+    g = (goal or "").lower()
     if g == "prolong":
-        return (metrics.champion.prolong_rate, metrics.candidate.prolong_rate)
+        return seg.prolong_rate
     if g == "fully_pay":
-        return (metrics.champion.close_rate, metrics.candidate.close_rate)
-    # default: union of paid outcomes (both)
-    return (metrics.champion.any_pay_rate, metrics.candidate.any_pay_rate)
+        return seg.close_rate
+    return seg.any_pay_rate
+
+
+def _segment_for_goal(goal: str) -> Optional[str]:
+    """Which segment is the natural cohort for this business goal:
+      fully_pay → NEW (we push first-time clients to close),
+      prolong   → REP (we push returning clients to extend).
+    For `both`, both segments are checked, so this returns None."""
+    g = (goal or "").lower()
+    if g == "fully_pay":
+        return "NEW"
+    if g == "prolong":
+        return "REP"
+    return None
 
 
 def should_promote(
@@ -266,10 +334,12 @@ def should_promote(
     min_lift: float = 0.02,
     min_n: int = 50,
 ) -> PromoteDecision:
-    """Decision rule. Promotion requires:
-      * both cohorts have at least `min_n` chats with payment data, AND
-      * candidate's goal-rate beats champion's by at least `min_lift`
-        (absolute, e.g. 0.02 = 2 percentage points).
+    """Segment-aware promotion rule. Promote only if the candidate's rate
+    on the segment that owns the business goal is >= champion's by at
+    least `min_lift`, and both cohorts within that segment have >= `min_n`
+    chats with payment data. For `target_goal=both`, *both* NEW and REP
+    must independently clear the bar — protects against Simpson's paradox
+    (overall lift driven by mix change rather than per-segment improvement).
     """
     decision = PromoteDecision(
         company_key=metrics.company_key,
@@ -278,32 +348,83 @@ def should_promote(
         min_lift=min_lift,
         min_n=min_n,
     )
-    champ_rate, cand_rate = _goal_rates(metrics, target_goal)
-    decision.champion_rate = champ_rate
-    decision.candidate_rate = cand_rate
-    decision.lift = cand_rate - champ_rate
 
-    champ_n = metrics.champion.with_payment_data
-    cand_n = metrics.candidate.with_payment_data
-    if champ_n < min_n or cand_n < min_n:
+    g = (target_goal or "").lower()
+    seg_label = _segment_for_goal(g)
+
+    # Build the (segment, champ_rate, cand_rate, champ_n, cand_n) tuples
+    # we need to evaluate for this goal.
+    if seg_label is None:
+        # `both` — evaluate NEW + REP independently.
+        targets = [
+            ("NEW", "fully_pay"),
+            ("REP", "prolong"),
+        ]
+    else:
+        targets = [(seg_label, g)]
+
+    # Headline rates for the log: pick the worst (lowest lift) segment so
+    # the operator sees the constraint that drove the decision. For single-
+    # segment goals there's only one row to pick.
+    worst_lift = None
+    worst_row = None
+    insufficient_segments: list[str] = []
+    failing_segments: list[str] = []
+
+    for seg_name, goal_name in targets:
+        champ_seg = metrics.champion_segments.get(seg_name)
+        cand_seg = metrics.candidate_segments.get(seg_name)
+        champ_rate = _segment_rate(champ_seg, goal_name)
+        cand_rate = _segment_rate(cand_seg, goal_name)
+        lift = cand_rate - champ_rate
+        if (
+            champ_seg.with_payment_data < min_n
+            or cand_seg.with_payment_data < min_n
+        ):
+            insufficient_segments.append(
+                f"{seg_name}({goal_name}) "
+                f"champ_n={champ_seg.with_payment_data} "
+                f"cand_n={cand_seg.with_payment_data}"
+            )
+            continue
+        if lift < min_lift:
+            failing_segments.append(
+                f"{seg_name}({goal_name}) lift={lift:+.1%}"
+            )
+        if worst_lift is None or lift < worst_lift:
+            worst_lift = lift
+            worst_row = (seg_name, goal_name, champ_rate, cand_rate, lift)
+
+    # Surface the headline numbers (segment that decided the call)
+    if worst_row is not None:
+        _, _, decision.champion_rate, decision.candidate_rate, decision.lift = worst_row
+
+    if insufficient_segments:
         decision.promote = False
         decision.reason = (
-            f"insufficient sample: champion_with_payment_data={champ_n}, "
-            f"candidate_with_payment_data={cand_n}, min_n={min_n}"
+            "insufficient sample: " + "; ".join(insufficient_segments)
+            + f" (min_n={min_n} per segment)"
         )
         return decision
 
-    if decision.lift >= min_lift:
-        decision.promote = True
-        decision.reason = (
-            f"candidate {target_goal} rate beats champion by "
-            f"{decision.lift:+.1%} (>= min_lift {min_lift:.1%})"
-        )
-    else:
+    if failing_segments:
         decision.promote = False
         decision.reason = (
-            f"insufficient lift: {decision.lift:+.1%} < min_lift "
-            f"{min_lift:.1%}"
+            "insufficient lift: " + "; ".join(failing_segments)
+            + f" (need >= {min_lift:.1%} per segment)"
+        )
+        return decision
+
+    decision.promote = True
+    if seg_label is None:
+        decision.reason = (
+            f"candidate beats champion by >= {min_lift:.1%} on BOTH "
+            f"NEW (fully_pay) and REP (prolong) segments"
+        )
+    else:
+        decision.reason = (
+            f"candidate {target_goal} rate on {seg_label} beats champion "
+            f"by {decision.lift:+.1%} (>= min_lift {min_lift:.1%})"
         )
     return decision
 

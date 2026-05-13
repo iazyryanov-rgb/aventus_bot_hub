@@ -7,9 +7,11 @@ from tkinter import ttk
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from ..ai_client import AnthropicAuditClient, AnthropicError
 from ..conversations_cache import load_cache, save_cache
-from ..data import Company
+from ..data import Company, load_raw as load_companies_raw
 from ..i18n import t
+from ..testers import load_testers
 from ..webitel import (
     Agent,
     ChatDialog,
@@ -41,6 +43,15 @@ class ConversationsPanel(ttk.Frame):
         self._all_dialogs: list[ChatDialog] = []
         self._members: dict[str, list[ChatPeer]] = {}
         self._collection_user_ids: set[str] = set()
+        self._cc_user_ids: set[str] = set()
+        # Routing-schema ids that constitute "our" collection bot for this
+        # company. Read from companies.json once at construction — small
+        # static set, no need to refresh on every reload.
+        self._our_flow_ids: set[str] = self._load_our_flow_ids()
+        # phone (digits-only) → tester display_name. Lets us replace anonymous
+        # `peer_id`s in the chat list with human names + bold styling for
+        # rows belonging to QA testers configured for this company.
+        self._tester_name_by_phone: dict[str, str] = self._load_tester_phones()
         # Grafana-mode side-channels — populated when we pull dialogs from
         # Postgres (full coverage incl. bot-only). Members aren't fetched
         # in bulk in that mode (1500+ chats × 1 REST call = too slow);
@@ -49,6 +60,7 @@ class ConversationsPanel(ttk.Frame):
         self._grafana_agent_id_by_chat: dict[str, int] = {}
         self._grafana_status_by_chat: dict[str, str] = {}  # bot|agent|queued_unanswered
         self._collection_agent_ids: set[int] = set()
+        self._cc_agent_ids: set[int] = set()
         self._data_source: str = "rest"  # set to "grafana" when load succeeds
         self._sel_id: Optional[str] = None
         self._cache: dict = load_cache(company.key)
@@ -88,13 +100,27 @@ class ConversationsPanel(ttk.Frame):
         phone_entry = ttk.Entry(filters, textvariable=self._phone_var, width=18)
         phone_entry.pack(side="left", padx=(4, 14))
         phone_entry.bind("<Return>", lambda _e: self._apply_filters())
-        self._collection_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        # Sector filter — collection vs customer service vs both.
+        ttk.Label(filters, text=t("chats_sector")).pack(side="left")
+        self._sector_labels = {
+            "all":        t("chats_sector_all"),
+            "collection": t("chats_sector_collection"),
+            "cc":         t("chats_sector_cc"),
+        }
+        self._sector_var = tk.StringVar(value=self._sector_labels["all"])
+        sector_box = ttk.Combobox(
             filters,
-            text="Только коллекшен",
-            variable=self._collection_var,
-            command=self._apply_filters,
-        ).pack(side="left", padx=(0, 14))
+            textvariable=self._sector_var,
+            values=[
+                self._sector_labels["all"],
+                self._sector_labels["collection"],
+                self._sector_labels["cc"],
+            ],
+            state="readonly",
+            width=12,
+        )
+        sector_box.pack(side="left", padx=(4, 14))
+        sector_box.bind("<<ComboboxSelected>>", lambda _e: self._apply_filters())
         # Bot / agent type filter — operator wants quick split.
         ttk.Label(filters, text="Тип:").pack(side="left")
         self._kind_var = tk.StringVar(value="Все")
@@ -164,10 +190,64 @@ class ConversationsPanel(ttk.Frame):
         )
         self.chat_canvas.bind_all("<MouseWheel>", self._on_mousewheel, add="+")
 
+        # Translation client (Anthropic Sonnet). Translations are per-message,
+        # cached locally — see `_translations_for(chat_id)`. We translate only
+        # NEW messages on each open of a chat; previously-translated messages
+        # come from the on-disk cache.
+        self._translator = AnthropicAuditClient()
+        self._translation_thread: Optional[threading.Thread] = None
+        self._translation_thread_chat: Optional[str] = None
+
         self._show_chat_placeholder("Выберите диалог сверху")
         self._reload()
 
     # ---------- helpers ----------
+
+    def _load_tester_phones(self) -> dict[str, str]:
+        """`destination`-digits → display_name. Built once at panel
+        construction; same data backs the `data/testers/<co>.json` file
+        the testers panel edits, so re-opening the chats tab picks up
+        new testers without an app restart."""
+        try:
+            data = load_testers(self._company.key)
+        except Exception:
+            return {}
+        out: dict[str, str] = {}
+        for tt in (data.get("testers") or []):
+            name = str(tt.get("display_name") or "").strip()
+            for raw in (tt.get("destination"), tt.get("phone_e164")):
+                digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+                if digits and name:
+                    out[digits] = name
+        return out
+
+    @staticmethod
+    def _digits(s: str) -> str:
+        return "".join(ch for ch in (s or "") if ch.isdigit())
+
+    def _load_our_flow_ids(self) -> set[str]:
+        """Schema ids that *we* own as the collection WhatsApp bot for this
+        company — pulled from companies.json. Used to classify a chat as
+        Коллекшен sector even when no agent picked it up (the collection bot
+        shares the WhatsApp gateway with KC bots like `whatsapp_schema_AI`,
+        so the channel alone is not a reliable signal)."""
+        try:
+            raw = load_companies_raw()
+        except Exception:
+            return set()
+        info = (raw.get(self._company.key) or {})
+        bots = info.get("bots") or {}
+        wa = bots.get("whatsapp") or {}
+        ids: set[str] = set()
+        for k in ("prod_schema_id", "candidate_schema_id", "router_schema_id"):
+            v = wa.get(k)
+            if v is not None:
+                ids.add(str(v))
+        # Legacy single-schema field (older companies.json shape).
+        v = info.get("schema_id")
+        if v is not None:
+            ids.add(str(v))
+        return ids
 
     def _on_mousewheel(self, event: tk.Event) -> None:
         try:
@@ -231,6 +311,7 @@ class ConversationsPanel(ttk.Frame):
         self._all_dialogs = []
         self._members.clear()
         self._collection_user_ids.clear()
+        self._cc_user_ids.clear()
         self._show_chat_placeholder("Выберите диалог сверху")
         since, until = self._period_to_range()
         q = self._q_var.get().strip() or None
@@ -400,15 +481,28 @@ class ConversationsPanel(ttk.Frame):
             agents = client.list_agents()
         except WebitelError:
             agents = []
+        def _is_collection_team(name: str) -> bool:
+            return "collection" in (name or "").lower()
+
+        def _is_cc_team(name: str) -> bool:
+            return "customer service" in (name or "").lower()
+
         collection_ids = {
-            a.user_id
-            for a in agents
-            if a.user_id and "collection" in (a.team_name or "").lower()
+            a.user_id for a in agents
+            if a.user_id and _is_collection_team(a.team_name)
+        }
+        cc_ids = {
+            a.user_id for a in agents
+            if a.user_id and _is_cc_team(a.team_name)
         }
         agent_name_by_id: dict[int, str] = {a.id: a.name for a in agents if a.id}
         collection_agent_ids = {
             a.id for a in agents
-            if a.id and "collection" in (a.team_name or "").lower()
+            if a.id and _is_collection_team(a.team_name)
+        }
+        cc_agent_ids = {
+            a.id for a in agents
+            if a.id and _is_cc_team(a.team_name)
         }
 
         # Try Grafana (full coverage incl. bot-only). Fall back to REST
@@ -439,15 +533,32 @@ class ConversationsPanel(ttk.Frame):
             self._grafana_agent_by_chat = {}
             self._grafana_status_by_chat = {}
             self._collection_agent_ids = set()
+            self._cc_agent_ids = set()
             self._data_source = "rest"
         else:
             self._collection_agent_ids = collection_agent_ids
+            self._cc_agent_ids = cc_agent_ids
             self._data_source = "grafana"
 
         cache = self._cache
         cached_dialogs = cache.setdefault("dialogs", {})
         cached_members = cache.setdefault("members", {})
         cached_messages = cache.setdefault("messages", {})
+
+        # Invalidate message caches for dialogs that grew (any new tail).
+        # On the next click, `_messages_worker` will refetch from API and
+        # translate only messages whose ids aren't yet in `translations_ru`
+        # — that's why we drop just `msgs`/`peers` and keep the translation
+        # dict, so the per-message Russian renderings carry over across
+        # refreshes. Applies in both REST and Grafana modes; otherwise the
+        # chat would lock at its first-seen state.
+        for d in dialogs:
+            old = cached_dialogs.get(d.id) or {}
+            if (old.get("last_msg_at_ms", 0) or 0) < d.last_msg_at_ms:
+                entry = cached_messages.get(d.id)
+                if isinstance(entry, dict):
+                    entry.pop("msgs", None)
+                    entry.pop("peers", None)
 
         # Bulk member fetch — only in REST mode (~200 chats). In
         # Grafana mode we have 1000+ chats; pre-fetching members would
@@ -458,8 +569,6 @@ class ConversationsPanel(ttk.Frame):
             for d in dialogs:
                 old = cached_dialogs.get(d.id) or {}
                 updated = (old.get("last_msg_at_ms", 0) or 0) < d.last_msg_at_ms
-                if updated and d.id in cached_messages:
-                    cached_messages.pop(d.id, None)
                 if d.id not in cached_members or updated:
                     needs_members.append(d)
 
@@ -491,7 +600,9 @@ class ConversationsPanel(ttk.Frame):
         reused = len(dialogs) - fresh
         self.after(
             0,
-            lambda: self._on_load_done(dialogs, members_map, collection_ids, fresh, reused),
+            lambda: self._on_load_done(
+                dialogs, members_map, collection_ids, cc_ids, fresh, reused,
+            ),
         )
 
     def _on_load_error(self, err: str) -> None:
@@ -505,6 +616,7 @@ class ConversationsPanel(ttk.Frame):
         dialogs: list[ChatDialog],
         members_map: dict[str, list[ChatPeer]],
         collection_user_ids: set[str],
+        cc_user_ids: set[str],
         fresh: int = 0,
         reused: int = 0,
     ) -> None:
@@ -513,6 +625,7 @@ class ConversationsPanel(ttk.Frame):
         self._all_dialogs = dialogs
         self._members = members_map
         self._collection_user_ids = collection_user_ids
+        self._cc_user_ids = cc_user_ids
         self._reload_btn.configure(state="normal")
         self._apply_filters()
         if fresh or reused:
@@ -557,17 +670,66 @@ class ConversationsPanel(ttk.Frame):
             return "bot", "🤖 бот"
         return "unknown", "❓ —"
 
-    def _is_collection(self, chat_id: str) -> bool:
+    def _is_collection(self, d: ChatDialog) -> bool:
+        if self._chat_in_team(
+            d.id, self._collection_user_ids, self._collection_agent_ids,
+        ):
+            return True
+        # Bot-only chat on one of our routing schemas (prod / candidate /
+        # router for whatsapp). The WhatsApp gateway also hosts KC bots
+        # (e.g. `whatsapp_schema_AI` on schema 70), so channel alone is
+        # not enough — we must match the actual `flow` schema id.
+        if self._is_bot_only(d.id) and (d.flow or "") in self._our_flow_ids:
+            return True
+        return False
+
+    def _is_cc(self, d: ChatDialog) -> bool:
+        if self._chat_in_team(
+            d.id, self._cc_user_ids, self._cc_agent_ids,
+        ):
+            return True
+        # Bot-only chat on a schema that's NOT ours (typically KC bots on
+        # WhatsApp like `whatsapp_schema_AI`, or webchat widget flows).
+        if self._is_bot_only(d.id):
+            flow = d.flow or ""
+            if flow and flow not in self._our_flow_ids:
+                return True
+        return False
+
+    def _chat_in_team(
+        self,
+        chat_id: str,
+        user_ids: set[str],
+        agent_ids: set[int],
+    ) -> bool:
         # Member-based check (REST mode or after detail fetch loaded peers).
-        if self._collection_user_ids:
+        if user_ids:
             for p in self._members.get(chat_id, []):
-                if p.type == "user" and p.id in self._collection_user_ids:
+                if p.type == "user" and p.id in user_ids:
                     return True
         # Grafana mode: check the agent_id we got from cc_member_attempt.
         agent_id = self._grafana_agent_id_by_chat.get(chat_id)
-        if agent_id and agent_id in self._collection_agent_ids:
+        if agent_id and agent_id in agent_ids:
             return True
         return False
+
+    def _is_bot_only(self, chat_id: str) -> bool:
+        # Grafana side-channel is authoritative when present.
+        status = self._grafana_status_by_chat.get(chat_id)
+        if status:
+            return status == "bot"
+        # REST mode: no human user member → bot-only.
+        members = self._members.get(chat_id, [])
+        if members:
+            return not any((p.type or "").lower() == "user" for p in members)
+        return False
+
+    def _selected_sector(self) -> str:
+        v = self._sector_var.get()
+        for slug, label in self._sector_labels.items():
+            if v == label:
+                return slug
+        return "all"
 
     def _selected_kind_filter(self) -> Optional[str]:
         v = self._kind_var.get()
@@ -585,7 +747,10 @@ class ConversationsPanel(ttk.Frame):
             haystack = f"{d.peer_id} {d.peer_name}".lower()
             if phone.lower() not in haystack:
                 return False
-        if self._collection_var.get() and not self._is_collection(d.id):
+        sector = self._selected_sector()
+        if sector == "collection" and not self._is_collection(d):
+            return False
+        if sector == "cc" and not self._is_cc(d):
             return False
         kind_filter = self._selected_kind_filter()
         if kind_filter and kind != kind_filter:
@@ -611,25 +776,42 @@ class ConversationsPanel(ttk.Frame):
                 n_unknown += 1
             if not self._matches(d, kind):
                 continue
+            # Replace peer_id with tester name when the sender's phone
+            # belongs to a QA tester for this company. Match by digits-only
+            # form against both peer_id and peer_name (Webitel sometimes
+            # stores the phone in peer_name, e.g. for unregistered chats).
+            tester_name = (
+                self._tester_name_by_phone.get(self._digits(d.peer_id))
+                or self._tester_name_by_phone.get(self._digits(d.peer_name))
+                or self._tester_name_by_phone.get(self._digits(d.title))
+            )
+            row_tags = [kind]
+            if tester_name:
+                title = tester_name
+                row_tags.append("tester")
+            else:
+                title = d.title or d.peer_name or d.peer_id or d.id[:8]
             self.tree.insert(
                 "",
                 "end",
                 iid=d.id,
                 values=(
-                    d.title or d.peer_name or d.peer_id or d.id[:8],
+                    title,
                     d.via_name or d.peer_type,
                     d.flow or "—",
                     label,
                     self._fmt_time(d.started_at_ms),
                     self._fmt_time(d.last_msg_at_ms),
                 ),
-                tags=(kind,),
+                tags=tuple(row_tags),
             )
             shown += 1
         # Subtle row colouring so bot/agent are visually distinct.
         self.tree.tag_configure("bot",   foreground="#6d28d9")
         self.tree.tag_configure("agent", foreground="#0f766e")
         self.tree.tag_configure("unknown", foreground="#6b7280")
+        # Bold rows for testers so the operator spots QA traffic at a glance.
+        self.tree.tag_configure("tester", font=("Segoe UI", 10, "bold"))
         total = len(self._all_dialogs)
         breakdown = (
             f"бот: {n_bot} · агент: {n_agent}"
@@ -679,9 +861,14 @@ class ConversationsPanel(ttk.Frame):
             msgs, peers, err = [], {}, str(e)
 
         if err is None:
-            self._cache.setdefault("messages", {})[chat_id] = {
+            messages_root = self._cache.setdefault("messages", {})
+            # Preserve previously-cached Russian translations across refreshes
+            # — translations are keyed by message id, which is stable.
+            existing = messages_root.get(chat_id) or {}
+            messages_root[chat_id] = {
                 "msgs": [asdict(m) for m in msgs],
                 "peers": {k: asdict(v) for k, v in peers.items()},
+                "translations_ru": dict(existing.get("translations_ru") or {}),
             }
             save_cache(self._company.key, self._cache)
 
@@ -709,19 +896,146 @@ class ConversationsPanel(ttk.Frame):
             ).pack(pady=20)
             return
         msgs = sorted(msgs, key=lambda m: m.date_ms)
+        chat_id = self._sel_id or ""
+        translations = self._translations_for(chat_id)
+        # Two-column layout: each message renders as one row in chat_inner
+        # with two equal-width cells — original (left) and Russian translation
+        # (right). The translation text comes from the local cache; missing
+        # entries get a placeholder bubble until the background translator
+        # fills them in.
+        self.chat_inner.columnconfigure(0, weight=1, uniform="chat_cols")
+        self.chat_inner.columnconfigure(1, weight=1, uniform="chat_cols")
+        # Column headers so the operator can tell which side is which.
+        tk.Label(
+            self.chat_inner, text="Оригинал", fg=META_FG, bg=BG,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+        tk.Label(
+            self.chat_inner, text="Перевод (RU)", fg=META_FG, bg=BG,
+            font=("Segoe UI", 9, "bold"),
+        ).grid(row=0, column=1, sticky="w", padx=12, pady=(8, 4))
+
         agent_peer_types = {"bot", "user"}
-        for m in msgs:
+        for i, m in enumerate(msgs, start=1):
             peer = peers.get(m.sender_id)
             if peer and peer.type:
                 is_client = peer.type.lower() not in agent_peer_types
             else:
                 is_client = True
-            self._add_bubble(m, peer, is_client)
+            tr = translations.get(m.id, "")
+            self._add_bubble_pair(i, m, peer, is_client, tr)
+
         self.update_idletasks()
         self.chat_canvas.yview_moveto(1.0)
 
-    def _add_bubble(
-        self, m: ChatMessage, peer: Optional[ChatPeer], is_client: bool
+        # Kick off background translation for messages that don't have a
+        # cached Russian translation yet. Only one translation job per chat;
+        # if the user re-selects the same chat we don't re-fire.
+        missing = [m for m in msgs if not translations.get(m.id, "").strip() and (m.text or "").strip()]
+        if missing and self._translator.is_configured():
+            self._start_translation_job(chat_id, missing)
+
+    def _translations_for(self, chat_id: str) -> dict[str, str]:
+        """Per-message Russian translations cached on disk. Created lazily
+        under `cache['messages'][chat_id]['translations_ru']` keyed by the
+        Webitel message id."""
+        if not chat_id:
+            return {}
+        msgs_blob = (self._cache.get("messages") or {}).get(chat_id) or {}
+        out = msgs_blob.get("translations_ru") or {}
+        return out if isinstance(out, dict) else {}
+
+    def _store_translations(self, chat_id: str, new_pairs: dict[str, str]) -> None:
+        if not chat_id or not new_pairs:
+            return
+        msgs = self._cache.setdefault("messages", {}).setdefault(chat_id, {})
+        cur = msgs.setdefault("translations_ru", {})
+        cur.update({k: v for k, v in new_pairs.items() if v})
+        save_cache(self._company.key, self._cache)
+
+    def _start_translation_job(
+        self, chat_id: str, missing: list[ChatMessage],
+    ) -> None:
+        # Don't double-translate the same chat in parallel — second click on
+        # the same dialog short-circuits.
+        if (
+            self._translation_thread is not None
+            and self._translation_thread.is_alive()
+            and self._translation_thread_chat == chat_id
+        ):
+            return
+        self._translation_thread_chat = chat_id
+
+        def _worker():
+            # Translate in chunks so a transient API failure doesn't cost
+            # the whole chat; chunks also keep individual response sizes
+            # within the model's max-tokens budget.
+            CHUNK = 30
+            try:
+                for offset in range(0, len(missing), CHUNK):
+                    batch = missing[offset:offset + CHUNK]
+                    texts = [m.text or "" for m in batch]
+                    out = self._translator.translate_batch(texts)
+                    pairs = {m.id: out[i] for i, m in enumerate(batch) if i < len(out)}
+                    if not self.winfo_exists() or self._sel_id != chat_id:
+                        return
+                    self.after(0, lambda p=pairs: self._on_translations(chat_id, p))
+            except AnthropicError:
+                # Silent — we already render originals; right column just
+                # stays as placeholder.
+                return
+
+        self._translation_thread = threading.Thread(target=_worker, daemon=True)
+        self._translation_thread.start()
+
+    def _on_translations(self, chat_id: str, pairs: dict[str, str]) -> None:
+        if not self.winfo_exists() or self._sel_id != chat_id:
+            return
+        self._store_translations(chat_id, pairs)
+        # Re-render so right-side bubbles pick up the new translations.
+        msgs_blob = (self._cache.get("messages") or {}).get(chat_id) or {}
+        try:
+            msgs = [ChatMessage(**m) for m in (msgs_blob.get("msgs") or [])]
+            peers = {
+                k: ChatPeer(**v) for k, v in (msgs_blob.get("peers") or {}).items()
+            }
+        except (TypeError, ValueError):
+            return
+        if msgs:
+            self._render_chat(msgs, peers, None)
+
+    def _add_bubble_pair(
+        self,
+        row_idx: int,
+        m: ChatMessage,
+        peer: Optional[ChatPeer],
+        is_client: bool,
+        translation: str,
+    ) -> None:
+        left_cell = tk.Frame(self.chat_inner, bg=BG)
+        left_cell.grid(row=row_idx, column=0, sticky="ew", padx=(12, 6), pady=4)
+        right_cell = tk.Frame(self.chat_inner, bg=BG)
+        right_cell.grid(row=row_idx, column=1, sticky="ew", padx=(6, 12), pady=4)
+        self._draw_bubble(left_cell, m, peer, is_client, m.text or "—")
+        if translation.strip():
+            self._draw_bubble(right_cell, m, peer, is_client, translation)
+        else:
+            placeholder = (
+                "переводится…" if self._translator.is_configured()
+                else "Anthropic API не настроен"
+            )
+            self._draw_bubble(
+                right_cell, m, peer, is_client, placeholder, faded=True,
+            )
+
+    def _draw_bubble(
+        self,
+        parent: tk.Widget,
+        m: ChatMessage,
+        peer: Optional[ChatPeer],
+        is_client: bool,
+        body: str,
+        faded: bool = False,
     ) -> None:
         bg = INCOMING_BG if is_client else OUTGOING_BG
         side = "left" if is_client else "right"
@@ -729,10 +1043,7 @@ class ConversationsPanel(ttk.Frame):
         sender_name = (peer.name if peer and peer.name else None) or (
             "Клиент" if is_client else "Агент"
         )
-
-        row = tk.Frame(self.chat_inner, bg=BG)
-        row.pack(fill="x", padx=12, pady=4)
-        bubble = tk.Frame(row, bg=bg)
+        bubble = tk.Frame(parent, bg=bg)
         bubble.pack(side=side, anchor=anchor)
         meta = f"{sender_name} · {self._fmt_time(m.date_ms)}"
         tk.Label(
@@ -744,10 +1055,10 @@ class ConversationsPanel(ttk.Frame):
         ).pack(anchor="w", padx=10, pady=(4, 0))
         tk.Label(
             bubble,
-            text=m.text or "—",
+            text=body,
             bg=bg,
-            fg=TEXT_FG,
-            wraplength=620,
+            fg=META_FG if faded else TEXT_FG,
+            wraplength=440,
             justify="left",
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 10, "italic" if faded else "normal"),
         ).pack(anchor="w", padx=10, pady=(0, 6))

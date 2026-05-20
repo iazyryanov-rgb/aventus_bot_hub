@@ -4,7 +4,7 @@
 (`sms.smsProvider='infobip-wa-mass'`), разбивая по двум руки A/B-теста:
 
   * champion  — пользователи, чей телефон НЕ попадает в
-                `candidate_digits` (см. `router_schema._candidate_digits_for`)
+                `candidate_digits` (см. `wa_bot_config.candidate_digits_for`)
   * candidate — те, чей телефон оканчивается на цифру из candidate-digits
 
 Сплит совпадает с тем, как Webitel-router (schema id из
@@ -223,8 +223,8 @@ def _is_bot_result(labels_json, filters: list[dict[str, str]]) -> bool:
 def _ab_arm(phone: Optional[str], candidate_digits: set[str]) -> str:
     """'champion' / 'candidate' / 'unknown' по последней цифре телефона.
 
-    Совпадает с router-схемой ([app/router_schema.py:_js_split_body](app/router_schema.py))
-    — берёт `phone[-1]`, проверяет на принадлежность candidate_digits."""
+    Совпадает с тем, что делает router-схема в Webitel
+    (`${user}` → последняя цифра → проверка на candidate_digits)."""
     if not phone:
         return "unknown"
     last = phone.strip()[-1:]
@@ -299,8 +299,8 @@ def _resolve_ab_config(company: Company) -> tuple[
 ]:
     """Возвращает (candidate_digits, champion_schema, candidate_schema)."""
     try:
-        from .router_schema import _candidate_digits_for, DEFAULT_CANDIDATE_DIGITS
-        digits = tuple(_candidate_digits_for(company.key))
+        from .wa_bot_config import candidate_digits_for
+        digits = tuple(candidate_digits_for(company.key))
     except Exception:
         digits = (0, 1, 2)
 

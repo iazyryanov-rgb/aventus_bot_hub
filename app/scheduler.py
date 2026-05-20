@@ -237,6 +237,84 @@ def _build_agents_on_break_text(company: Company) -> Optional[str]:
     )
 
 
+def _build_agents_capacity_text(company: Company) -> Optional[str]:
+    """Fire when Collection is under-staffed or someone is overloaded.
+
+    Pulls the same numbers shown in Bot → Agents → Капасити panel:
+    `compute_capacity(company)` → for each group with a per-agent
+    target (G0/G1/G2 by DPD), check:
+      • under-staffing:  ceil(loans / target) > agents
+      • overload:        max_per_agent > target
+
+    If any group fails — emit a warning summarising every flagged
+    group. If all groups are fine — return None (no spam).
+
+    Tenants whose CRM doesn't have the capacity recipe (AR_/PE_)
+    silently return None — the alert is harmless to leave enabled
+    on every tenant.
+    """
+    try:
+        from .capacity import CapacityUnavailable, compute_capacity
+        stats = compute_capacity(company)
+    except CapacityUnavailable:
+        return None
+    except Exception:
+        return None
+
+    flagged = []
+    for g in stats:
+        if g.target_per_agent is None:
+            continue  # G3+ outsource — no target, no alert
+        understaffed = g.needed is not None and g.needed > g.agents
+        overloaded = g.max_per_agent > g.target_per_agent
+        if understaffed or overloaded:
+            flagged.append((g, understaffed, overloaded))
+
+    if not flagged:
+        return None
+
+    bullets = []
+    short_count = 0
+    over_count = 0
+    for g, under, over in flagged:
+        rng = (
+            f"DPD {g.dpd_from}..{g.dpd_to if g.dpd_to is not None else '+'}"
+        )
+        parts = [f"{g.name} · {rng}"]
+        if under:
+            short_count += 1
+            delta = (g.needed or 0) - g.agents
+            parts.append(
+                f"⚠ агентов {g.agents}, нужно {g.needed} "
+                f"(нехватка +{delta}); loans={g.loans}, "
+                f"target={g.target_per_agent}/агент"
+            )
+        if over:
+            over_count += 1
+            parts.append(
+                f"🔥 max на агенте {g.max_per_agent} > цели {g.target_per_agent}"
+            )
+        bullets.append(" · ".join(parts))
+
+    return render_alert_html(
+        severity="warning",
+        title="Collection capacity gap",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Agents",
+        metrics=[
+            ("Under-staffed groups", str(short_count)),
+            ("Overloaded groups", str(over_count)),
+        ],
+        bullets=bullets,
+        body=(
+            "Источник — `loan ⋈ admUser` + `collection_category`. Цель "
+            "нагрузки: 250 (G0) / 300 (G1) / 500 (G2) сделок на агента."
+        ),
+    )
+
+
 def _build_queue_checklist_text(company: Company) -> Optional[str]:
     try:
         client = WebitelClient(company.webitel_host, company.webitel_access_token)
@@ -477,21 +555,6 @@ def _save_health_state(company_key: str, state: dict) -> None:
         pass
 
 
-def _autopause_cycle(company_key: str, reason: str) -> None:
-    """Best-effort cycle auto-pause for health-check trips. Mirrors the
-    `_pause_cycle` helper in calibration_cycle but tolerates that module
-    not being importable in non-bot configurations."""
-    try:
-        from . import calibration_cycle as cc
-        cfg = cc.load_cycle_config(company_key)
-        cfg["enabled"] = False
-        cfg["paused_at_ms"] = int(time.time() * 1000)
-        cfg["paused_reason"] = reason
-        cc.save_cycle_config(company_key, cfg)
-    except Exception:
-        pass
-
-
 # H4 — Webitel API down --------------------------------------------------------
 
 WEBITEL_API_DOWN_MIN_FAILS = 2
@@ -550,7 +613,7 @@ def _build_webitel_api_down_text(company: Company) -> Optional[str]:
                 context_kv=[("Last error", (last_error or "")[:200])],
                 body=(
                     "Health-check cannot reach the Webitel API. "
-                    "Calibration cycle and audits will not run until restored."
+                    "Audits will not run until restored."
                 ),
             )
             h4["alerted"] = True
@@ -583,7 +646,7 @@ def _pull_wa_dialog_count(client: WebitelClient, since_ms: int, until_ms: int) -
 
 def _build_wa_chat_volume_drop_text(company: Company) -> Optional[str]:
     """Compare last-1h dialog count vs rolling baseline (avg of same hour
-    of day across last 7 days). Auto-pauses calibration cycle on trip.
+    of day across last 7 days).
     Skips on quiet hours (23:00–08:00 local) and on Sundays — too noisy."""
     try:
         tz = ZoneInfo(company.timezone or "UTC")
@@ -640,17 +703,10 @@ def _build_wa_chat_volume_drop_text(company: Company) -> Optional[str]:
                 body=(
                     "Inbound WA volume in the last hour is far below the rolling "
                     "baseline. Likely causes: gateway misrouted, router schema "
-                    "broken, or Infobip channel offline. Calibration cycle was "
-                    "auto-paused as a precaution."
+                    "broken, or Infobip channel offline."
                 ),
-                action_hint="After diagnosing, resume the cycle:",
-                action_command=f"python -m app.calibration_cycle unpause {company.key}",
             )
             h1["last_alert_ms"] = now_ms
-            _autopause_cycle(
-                company.key,
-                f"wa_chat_volume_drop: last_hour={cur}, avg={avg:.1f}, drop={drop_pct}%",
-            )
 
     # Update rolling baseline at the END so the very-low current value
     # doesn't poison its own future baselines.
@@ -1167,6 +1223,7 @@ TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "queue_checklist": _build_queue_checklist_text,
     "agents_on_break": _build_agents_on_break_text,
     "agents_chats_unanswered": _build_agents_chats_unanswered_text,
+    "agents_capacity": _build_agents_capacity_text,
     "dash_outbound_drop": _build_dash_outbound_drop_text,
     "dash_amd_machine_high": _build_dash_amd_machine_high_text,
     "dash_handled_low": _build_dash_handled_low_text,
@@ -1291,34 +1348,6 @@ class AlertScheduler:
                         )
                         continue
 
-                    # weekly_review fires once a week (configured weekday,
-                    # default Monday) and pulls thousands of chats — same
-                    # forking model as ai_audit. The schedule throttle still
-                    # applies (Раз в сутки = at-most-daily), so the weekday
-                    # filter just gates which day actually fires.
-                    if template == "weekly_review":
-                        weekday_target = int(alert.get("weekday") or 0)
-                        try:
-                            now_local = datetime.now(
-                                ZoneInfo(company.timezone or "UTC")
-                            )
-                        except Exception:
-                            now_local = datetime.utcnow()
-                        if now_local.weekday() != weekday_target:
-                            continue
-                        wr_key = f"{ckey}/weekly_review"
-                        with self._audit_inflight_lock:
-                            if wr_key in self._audit_inflight:
-                                continue
-                            self._audit_inflight.add(wr_key)
-                        alert["last_run_at_ms"] = now_ms
-                        changed = True
-                        snapshot = dict(alert)
-                        self._audit_pool.submit(
-                            self._run_weekly_review, company, snapshot,
-                        )
-                        continue
-
                     builder = TEMPLATE_BUILDERS.get(template)
                     if builder is None:
                         continue
@@ -1389,81 +1418,6 @@ class AlertScheduler:
         tg_err = send_audit_to_telegram(
             company, result, period_days, model_kind, elapsed,
         )
-        # Run the auto-calibration cycle on the candidate schema. Any
-        # error here MUST NOT propagate — the audit + Telegram delivery
-        # is the operator's promised contract; cycle is best-effort.
-        try:
-            from .audit_scheduler import send_cycle_summary_to_telegram
-            from .calibration_cycle import run_cycle
-            audit_id = (result.get("_meta") or {}).get("audit_id") or ""
-            cycle_res = run_cycle(
-                company.key, result,
-                audit_meta={
-                    "audit_id": audit_id,
-                    "ts_ms": (result.get("_meta") or {}).get("ts_ms") or 0,
-                    "model_kind": model_kind,
-                },
-            )
-            try:
-                send_cycle_summary_to_telegram(company, cycle_res, audit_id)
-            except Exception:
-                pass
-        except Exception:
-            pass
-        self._record_ai_audit_status(
-            company.key, alert.get("id", ""),
-            last_status="ok" if not tg_err else "tg_failed",
-            last_error=tg_err or "",
-        )
-
-    # ------------------------------------------------------------------
-    # Weekly review worker
-    # ------------------------------------------------------------------
-
-    def _run_weekly_review(self, company: Company, alert: dict) -> None:
-        wr_key = f"{company.key}/weekly_review"
-        try:
-            self._do_weekly_review(company, alert)
-        except Exception:
-            pass
-        finally:
-            with self._audit_inflight_lock:
-                self._audit_inflight.discard(wr_key)
-
-    def _do_weekly_review(self, company: Company, alert: dict) -> None:
-        from .audit_scheduler import send_weekly_review_to_telegram
-        from .weekly_review import compute_weekly_metrics, should_promote
-
-        days = int(alert.get("days") or 7)
-        target_goal = str(alert.get("target_goal") or "fully_pay")
-        try:
-            min_lift = float(alert.get("min_lift_pct") or 2.0) / 100.0
-        except (TypeError, ValueError):
-            min_lift = 0.02
-        min_n = int(alert.get("min_n") or 50)
-        chat_limit = int(alert.get("chat_limit") or 5000)
-        until_ms = int(time.time() * 1000)
-        since_ms = until_ms - days * 86_400_000
-
-        try:
-            metrics = compute_weekly_metrics(
-                company.key, since_ms, until_ms,
-                chat_limit=chat_limit,
-            )
-        except Exception as exc:
-            self._record_ai_audit_status(
-                company.key, alert.get("id", ""),
-                last_status="failed",
-                last_error=f"{type(exc).__name__}: {exc}",
-            )
-            return
-        decision = should_promote(
-            metrics,
-            target_goal=target_goal,
-            min_lift=min_lift,
-            min_n=min_n,
-        )
-        tg_err = send_weekly_review_to_telegram(company, decision, days)
         self._record_ai_audit_status(
             company.key, alert.get("id", ""),
             last_status="ok" if not tg_err else "tg_failed",

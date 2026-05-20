@@ -22,6 +22,14 @@ class BotPanel(ttk.Frame):
             conversations = ConversationsPanel(self.notebook, company)
             self.notebook.add(conversations, text=t("tab_chats"))
 
+            from .calls_panel import CallsPanel
+            calls = CallsPanel(self.notebook, company)
+            self.notebook.add(calls, text=t("tab_calls"))
+
+            from .capacity_panel import CapacityPanel
+            capacity = CapacityPanel(self.notebook, company)
+            self.notebook.add(capacity, text=t("tab_capacity"))
+
         if kind == "voice":
             from .voice_bot_panel import (
                 VoiceBotMappingPanel,
@@ -51,7 +59,6 @@ class BotPanel(ttk.Frame):
                 WaBotSendersPanel,
             )
             from .chat_audit_panel import ChatAuditPanel
-            from .calibration_panel import CalibrationPanel
             self.notebook.add(
                 WaBotOverviewPanel(self.notebook, company),
                 text=t("wa_bot_tab_overview"),
@@ -79,10 +86,6 @@ class BotPanel(ttk.Frame):
             self.notebook.add(
                 ChatAuditPanel(self.notebook, company),
                 text=t("wa_bot_tab_audit"),
-            )
-            self.notebook.add(
-                CalibrationPanel(self.notebook, company),
-                text=t("wa_bot_tab_calibration"),
             )
 
         alerts = AlertsPanel(self.notebook, company, kind)

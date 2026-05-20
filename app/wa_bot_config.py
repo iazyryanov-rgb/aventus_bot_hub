@@ -417,6 +417,31 @@ def save_config(company_key: str, cfg: dict) -> None:
         pass
 
 
+DEFAULT_CANDIDATE_DIGITS = (0, 1, 2)
+
+
+def candidate_digits_for(company_key: str) -> list[int]:
+    """A/B split: which last-digits of `${user}` go to the candidate
+    schema. Pulled from this WA bot config's `ab_split` block; defaults
+    to {0,1,2}. Read-only — never mutates Webitel."""
+    try:
+        from .audit_storage import get_ab_split
+        cfg = load_config(company_key)
+        ab = get_ab_split(cfg or {})
+        digits = list(ab.get("candidate_digits") or [])
+    except Exception:
+        digits = []
+    out: list[int] = []
+    for d in digits:
+        try:
+            di = int(d)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= di <= 9 and di not in out:
+            out.append(di)
+    return out or list(DEFAULT_CANDIDATE_DIGITS)
+
+
 def get_prod_schema(company_key: str) -> tuple[Optional[str], Optional[int]]:
     """Returns (schema_name, schema_id) deployed to prod for the WhatsApp
     bot kind, taken from companies.json."""

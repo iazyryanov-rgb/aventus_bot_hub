@@ -370,8 +370,8 @@ def _phase2_context(company: Company) -> str:
 
     # 4) A/B router config — digits routed to candidate.
     try:
-        from .router_schema import _candidate_digits_for
-        digits = _candidate_digits_for(company.key)
+        from .wa_bot_config import candidate_digits_for
+        digits = candidate_digits_for(company.key)
     except Exception:
         digits = []
     if digits:
@@ -541,8 +541,8 @@ def run_audit(
 
     system_text = build_system_prompt(company, lang=lang)
     try:
-        from .router_schema import _candidate_digits_for
-        cand_digits = {str(d) for d in _candidate_digits_for(company.key)}
+        from .wa_bot_config import candidate_digits_for
+        cand_digits = {str(d) for d in candidate_digits_for(company.key)}
     except Exception:
         cand_digits = set()
     user_text = build_user_prompt(records, data_meta, candidate_digits=cand_digits)

@@ -256,7 +256,6 @@ class AuditQueue:
     ) -> None:
         # Lazy imports — heavy modules.
         from .audit_scheduler import send_audit_to_telegram
-        from .calibration_cycle import run_cycle as _run_cycle
         from .chat_audit import run_audit
 
         job = load_job(company.key, request_id)
@@ -294,19 +293,6 @@ class AuditQueue:
                     )
                 except Exception as exc:  # noqa: BLE001
                     job.tg_err = f"{type(exc).__name__}: {exc}"
-            if params.get("run_cycle_after"):
-                try:
-                    _run_cycle(
-                        company.key, result,
-                        audit_meta={
-                            "audit_id": audit_id or "",
-                            "ts_ms": (result.get("_meta") or {}).get("ts_ms") or 0,
-                            "model_kind": str(params.get("model_kind") or "sonnet"),
-                        },
-                    )
-                except Exception:
-                    pass
-
             job.status = STATUS_DONE
         except Exception as exc:  # noqa: BLE001
             job.status = STATUS_FAILED

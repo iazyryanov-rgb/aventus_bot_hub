@@ -321,7 +321,6 @@ class ChatAuditPanel(ttk.Frame):
             "lang": current_language(),
             "period_days": days,
             "send_to_tg": bool(self._send_tg_var.get()),
-            "run_cycle_after": False,  # manual runs: cycle stays manual
         }
         job = get_queue().enqueue(self._company, params)
         self._active_job_id = job.request_id

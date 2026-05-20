@@ -284,7 +284,6 @@ class CompaniesTree(ttk.Frame):
             actions,
             text=t("btn_analytics"),
             command=self._open_analytics,
-            state="disabled",
         )
         self._analytics_btn.pack(side="left", padx=(8, 0))
         self._sync_btn = ttk.Button(
@@ -331,7 +330,6 @@ class CompaniesTree(ttk.Frame):
                     indent=28,
                     on_menu=lambda e, key=c.key, k=kind: self._show_bot_menu(e, key, k),
                     on_click=on_click,
-                    on_check=lambda _v: self._refresh_analytics(),
                 )
                 bot_row.pack(fill="x")
                 self._bot_rows[(c.key, kind)] = bot_row
@@ -344,7 +342,6 @@ class CompaniesTree(ttk.Frame):
         self._bot_rows.clear()
         self._companies = load_companies()
         self._populate()
-        self._refresh_analytics()
 
     def _tick(self) -> None:
         for c in self._companies:
@@ -376,7 +373,6 @@ class CompaniesTree(ttk.Frame):
             menu.grab_release()
 
     def _handle_company_check(self, company_key: str, checked: bool) -> None:
-        self._refresh_analytics()
         if self._on_company_check:
             try:
                 self._on_company_check(company_key, checked)
@@ -399,51 +395,11 @@ class CompaniesTree(ttk.Frame):
             self, company_key=None, on_saved=lambda _k: self._reload_companies()
         )
 
-    def _collect_selection(self) -> tuple[list[str], list[tuple[str, str]]]:
-        companies_checked: list[str] = []
-        bots_checked: list[tuple[str, str]] = []
-        for c in self._companies:
-            row = self._co_rows.get(c.key)
-            if row and row.is_checked():
-                companies_checked.append(c.key)
-            for kind in ("voice", "whatsapp", "agents"):
-                br = self._bot_rows.get((c.key, kind))
-                if br and br.is_checked():
-                    bots_checked.append((c.key, kind))
-        return companies_checked, bots_checked
-
-    def _analytics_eligible(
-        self, companies: list[str], bots: list[tuple[str, str]]
-    ) -> bool:
-        if companies and bots:
-            return False
-        if companies and not bots:
-            return len(companies) >= 1
-        if bots and not companies:
-            kinds = {kind for _, kind in bots}
-            return len(kinds) == 1
-        return False
-
-    def _refresh_analytics(self) -> None:
-        companies, bots = self._collect_selection()
-        state = "normal" if self._analytics_eligible(companies, bots) else "disabled"
-        self._analytics_btn.configure(state=state)
-
     def _open_analytics(self) -> None:
         if not self._on_open_panel:
             return
-        companies, bots = self._collect_selection()
-        if not self._analytics_eligible(companies, bots):
-            return
-        if companies and not bots:
-            keys = companies
-            kind: Optional[str] = None
-        else:
-            keys = sorted({k for k, _ in bots})
-            kind = next(iter({k for _, k in bots}))
-        objs = [c for c in self._companies if c.key in keys]
         from .analytics_panel import AnalyticsPanel
-        self._on_open_panel(lambda parent: AnalyticsPanel(parent, objs, kind))
+        self._on_open_panel(lambda parent: AnalyticsPanel(parent))
 
     def _open_bot_panel(self, company_key: str, kind: str) -> None:
         company = next((c for c in self._companies if c.key == company_key), None)

@@ -10,14 +10,15 @@ Stored at `data/testers/<COMPANY_KEY>.json` with shape:
           "display_name": "...",
           "phone_e164": "+57...",
           "destination": "57...",     # digits only, used by bots as ${destination}
-          "environment": "prod" | "staging",
-          "test_owner_key": "...",    # human owner of the test account
-          "company": "...",
-          "notes": "..."
+          "active": true | false,     # mirrors the router schema switch
+          "notes": "..."              # auto-filled with set-node position
         },
         ...
       ]
     }
+
+The list is read-only from the hub's perspective — it gets reconciled
+against the company's Webitel router schema via `sync_from_router()`.
 """
 from __future__ import annotations
 
@@ -26,9 +27,6 @@ import re
 from pathlib import Path
 
 from .paths import data_dir
-
-
-ENVIRONMENTS = ("prod", "staging")
 
 
 def testers_path(company_key: str) -> Path:
@@ -115,3 +113,83 @@ def get_default_tester(company_key: str) -> dict | None:
         if t.get("id") == did:
             return t
     return None
+
+
+def _digits(s: str) -> str:
+    return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+
+def _phone_key(tester: dict) -> str:
+    """Digit-only key used to match a local tester against a router
+    switch case. Prefers `phone_e164`, falls back to `destination`."""
+    return _digits(tester.get("phone_e164")) or _digits(tester.get("destination"))
+
+
+def sync_from_router(company_key: str) -> dict:
+    """Reconcile local testers.json against the company's Webitel router
+    schema. The schema is the source of truth — its `testers` page's
+    switch on `${user}` lists the active testers.
+
+    Per-tester behaviour:
+      * Phone present in schema AND in local list → update destination
+        from the schema's set node, mark active=True, refresh notes
+        with the set-node position.
+      * Phone present in schema, missing locally → create a new entry
+        with display_name='No name tester', phone_e164='+<digits>',
+        destination from the schema, active=True.
+      * Phone in local list but missing from the schema → leave the
+        record intact, set active=False.
+
+    Returns a small report dict (counts + lists of affected phones).
+    """
+    from .router_testers_sync import fetch_router_testers
+
+    schema_entries = fetch_router_testers(company_key)
+    by_phone = {e["phone"]: e for e in schema_entries}
+
+    data = load_testers(company_key)
+    testers = data.get("testers") or []
+
+    matched_phones: set[str] = set()
+    created: list[str] = []
+    updated: list[str] = []
+    deactivated: list[str] = []
+
+    for tester in testers:
+        phone = _phone_key(tester)
+        if phone and phone in by_phone:
+            entry = by_phone[phone]
+            tester["destination"] = entry["destination"]
+            tester["active"] = True
+            x, y = entry["set_pos"]
+            tester["notes"] = f"set@({x:.0f},{y:.0f})"
+            matched_phones.add(phone)
+            updated.append(phone)
+        else:
+            tester["active"] = False
+            if phone:
+                deactivated.append(phone)
+
+    for phone, entry in by_phone.items():
+        if phone in matched_phones:
+            continue
+        x, y = entry["set_pos"]
+        new_tester = {
+            "id": make_tester_id("No name tester", phone),
+            "display_name": "No name tester",
+            "phone_e164": f"+{phone}",
+            "destination": entry["destination"],
+            "active": True,
+            "notes": f"set@({x:.0f},{y:.0f})",
+        }
+        testers.append(new_tester)
+        created.append(phone)
+
+    data["testers"] = testers
+    save_testers(company_key, data)
+    return {
+        "schema_count": len(schema_entries),
+        "created": created,
+        "updated": updated,
+        "deactivated": deactivated,
+    }

@@ -10,6 +10,7 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("queue_checklist",          "🧩 Queues check · Collection", "Автопроверка чек-листа Collection (G1/G2/G3 × Main/APTP/BPTP). Алерт уходит только если есть пробелы."),
     ("agents_on_break",          "😴 Agents on break > online", "Считает по очередям Collection × {Main, APTP, BPTP}: сколько агентов online vs pause. Алерт, если в любой такой очереди на перерыве больше, чем онлайн."),
     ("agents_chats_unanswered",  "🕒 Agents · chats unanswered > 15min", "Перечисляет агентов, у которых есть открытые чаты, где последнее сообщение от клиента старше 15 минут."),
+    ("agents_capacity",          "📊 Collection · capacity gap",        "Сравнивает закрепление в `collection_category` ↔ загрузку: для G0/G1/G2 алерт, если нужно больше агентов (`ceil(loans/target) > agents`) или max-кейслоад одного агента > целевой нормы (250/300/500). Цифры тянутся из CRM (`loan ⋈ admUser`)."),
     ("broken_validation", "🔴 Broken Validation", "Сбой валидации диалога — критично. Поля для фикса: stage, alert_type, destination."),
     ("crm_validation",    "⚠️ CRM Validation",   "Расхождение ответа CRM с ожиданиями. Поля: vars_to_check, problem_variable, crm_error, crm_message."),
     ("company_error",     "🔴 Company Error",    "Ошибка на стороне компании. Поля: alert_type, project_index."),
@@ -21,7 +22,6 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("dash_handled_low",      "👥 Обработано агентом < 40%", "Сигнал, если процент звонков, обработанных агентом, ниже 40% от попыток сегодня."),
     ("dash_crm_results_low",  "📒 CRM-результаты < 50% от обработанных", "Сигнал, если число записей в communication_history меньше 50% от обработанных агентом сегодня."),
     ("ai_audit",              "🤖 AI-аудит · WhatsApp",                  "Полный AI-аудит чатов через Claude (Sonnet/Opus). Запускается по расписанию, рекомендации публикуются в тему компании в Telegram. Поля для фикса: model_kind (sonnet/opus), chat_limit, period_days."),
-    ("weekly_review",         "📊 Weekly review · Champion vs Candidate", "Еженедельная сводка: champion-когорта vs candidate-когорта (split по последней цифре телефона). Считает close/prolong/any-pay rates, выдаёт PROMOTE/KEEP decision. Поля: weekday (0=Mon), days (default 7), target_goal (fully_pay/prolong/both), min_lift_pct (default 2.0), min_n (default 50), chat_limit (default 5000)."),
     ("webitel_api_down",      "🚨 Webitel API недоступен",                "Health-check: пингует cheap эндпоинт Webitel; алерт после 2 подряд фейлов и о восстановлении. Без полей. Запуск раз в 5 минут."),
     ("wa_chat_volume_drop",   "📉 WA трафик упал",                        "Сравнивает количество WA-диалогов за последний час с rolling baseline (тот же час дня за последние 7 дней, weekdays). Алерт при падении >70%. Auto-pause цикла. Запуск раз в 30 минут."),
     ("wa_bot_silent",         "🚨 Бот молчит на чатах",                   "Если за последний час >50% диалогов: клиент написал последним, прошло >5min, агент не подключался — бот не отвечает. Alert raise при росте. Запуск раз в 15 минут."),
@@ -331,6 +331,22 @@ DEFAULT_AGENT_ALERTS: list[dict] = [
         "start_time": "",
         "enabled": True,
         "notes": "Авто: чаты, в которых клиент написал последним и не получил ответа более 15 минут. В алерт идёт список агентов и сколько у каждого зависших чатов.",
+    },
+    {
+        "name": "Collection capacity gap",
+        "template": "agents_capacity",
+        "schedule": "Раз в сутки",
+        "trigger_mode": "time",
+        "working_hours_only": False,
+        "start_time": "09:30",
+        "enabled": True,
+        "notes": (
+            "Авто: ежедневный отчёт по нагрузке Collection. Алерт уходит "
+            "только если в G0/G1/G2 не хватает агентов (`нужно > есть`) "
+            "или у кого-то из агентов уже больше займов, чем целевая "
+            "норма (250 / 300 / 500). Молчит, когда всё ок. Данные те же, "
+            "что в табе Bot → Agents → Капасити."
+        ),
     },
 ]
 

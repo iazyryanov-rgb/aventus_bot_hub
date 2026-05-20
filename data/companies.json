@@ -39,8 +39,8 @@
                 "prod_schema_name": "whatsapp-infobip-credito365-prod",
                 "candidate_schema_id": 126,
                 "candidate_schema_name": "whatsapp-infobip-credito365-candidate",
-                "router_schema_id": 127,
-                "router_schema_name": "whatsapp-infobip-credito365-router",
+                "router_schema_id": 141,
+                "router_schema_name": "whatsapp-infobip-credito365-router2",
                 "bot_phone_number": "+57 315 1586256"
             }
         },

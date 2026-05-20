@@ -190,19 +190,6 @@ def _react(payload: dict) -> Optional[str]:
             dq.popleft()
         streak = len(dq)
 
-    if kind == "crm_fail" and streak >= CRM_FAIL_STREAK_THRESHOLD:
-        # Auto-pause the company's calibration cycle.
-        try:
-            from . import calibration_cycle as cc
-            cc._pause_cycle(
-                co_key,
-                f"crm_fail streak: {streak} bot-side alerts in "
-                f"{CRM_FAIL_STREAK_WINDOW_MS // 60000}min — "
-                "investigate CRM endpoint before resuming.",
-            )
-            return f"auto-paused cycle (crm_fail × {streak})"
-        except Exception:
-            return None
     return None
 
 

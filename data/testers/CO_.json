@@ -6,16 +6,18 @@
             "display_name": "QA дополнительный",
             "phone_e164": "+573009998877",
             "destination": "3009998877",
-            "environment": "staging"
+            "environment": "staging",
+            "active": false
         },
         {
             "id": "Jose_David_Naranjo_Bedoya_46365003",
             "display_name": "Jose David Naranjo Bedoya",
             "phone_e164": "+573146365003",
-            "destination": "573146365003",
+            "destination": "",
             "company": "Credito365",
             "test_owner_key": "Jose David Naranjo Bedoya",
-            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+            "notes": "set@(793,-173)",
+            "active": true
         },
         {
             "id": "Pablo_Andrés_Gonzales_Balbutin_22562287",
@@ -24,16 +26,18 @@
             "destination": "573122562287",
             "company": "Credito365",
             "test_owner_key": "Pablo Andrés Gonzales Balbutin",
-            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)",
+            "active": false
         },
         {
             "id": "Ivan_Zyrianov_00096386",
             "display_name": "Ivan Zyrianov",
             "phone_e164": "+79100096386",
-            "destination": "573103756093",
+            "destination": "573044470934",
             "company": "Credito365",
             "test_owner_key": "Ivan Zyrianov",
-            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+            "notes": "set@(792,-332)",
+            "active": true
         },
         {
             "id": "Juan_Fernando_Vargas_Garces_159753",
@@ -42,7 +46,24 @@
             "destination": "159753",
             "company": "Credito365",
             "test_owner_key": "Juan Fernando Vargas Garces",
-            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)"
+            "notes": "Из catalog.json (блок testers.people, WhatsApp / справочник)",
+            "active": false
+        },
+        {
+            "id": "No_name_tester_28442941",
+            "display_name": "No name tester",
+            "phone_e164": "+573028442941",
+            "destination": "",
+            "active": true,
+            "notes": "set@(790,-14)"
+        },
+        {
+            "id": "No_name_tester_09631038",
+            "display_name": "No name tester",
+            "phone_e164": "+573009631038",
+            "destination": "",
+            "active": true,
+            "notes": "set@(790,148)"
         }
     ]
 }

@@ -13,71 +13,13 @@ from ..alerts import (
     load_alerts_config,
     send_telegram_message,
 )
+from ..cc_queues import CC_CHECKLIST, normalize_queue_name as _normalize_queue_name
 from ..data import Company
 from ..i18n import t
 from ..sectors import DEFAULT_SECTOR, SECTOR_CC, SECTOR_COLLECTION, SECTORS
 from ..webitel import QUEUE_TYPE_NAMES, Queue, WebitelClient, WebitelError
 
 AGENT_QUEUE_TYPES = (0, 1, 4, 5, 10)
-
-
-# CC sector queue checklist. Each entry: (category, channel, expected name).
-# Categories: Unsigned, Unfinished, Auto-creation, Phone confirmation,
-# Inbound (hotline), Telesales, Other. Channels: Predictive (Agent),
-# VoiceBot, Inbound. Names are taken verbatim from the operator's catalog
-# — matching ignores case and treats Cyrillic СС / Latin CC as equal,
-# so naming drift in Webitel doesn't break the check.
-CC_CHECKLIST: tuple[tuple[str, str, str], ...] = (
-    # Unsigned (CC_Uns)
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat Today"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agents _100%_new today"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agent _100%_new yesterday"),
-    ("Unsigned",         "Predictive (Agent)", "СС_Unsigned_Today_Sun&HollyD_Agent_100%"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned_Agents_Night"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned appliactions_call_backs"),
-    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat today"),
-    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat yesterday"),
-    ("Unsigned",         "VoiceBot",           "CC_unsigned_IVR_small"),
-    ("Unsigned",         "VoiceBot",           "CC_Unsigned_telesales_VoiceBot"),
-    ("Unsigned",         "Inbound",            "CC_Inbound_Unsigned"),
-    # Unfinished (CC_Unf)
-    ("Unfinished",       "Predictive (Agent)", "CC_Unfinished_Agents_Night"),
-    ("Unfinished",       "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat yesterday"),
-    ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Today_Agent_50%"),
-    ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Today_Sun&HollyD_Agent_100%"),
-    ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Yesterday_Agent_20%"),
-    ("Unfinished",       "Predictive (Agent)", "CC_Unfinished_after_VB"),
-    ("Unfinished",       "Predictive (Agent)", "CC_ Today_Documents_agents>1/2h"),
-    ("Unfinished",       "VoiceBot",           "CC_Documents_VoiceBot<1/2h"),
-    ("Unfinished",       "VoiceBot",           "СС_Unfinished_Today_Bot_50%"),
-    ("Unfinished",       "VoiceBot",           "СС_Unfinished_Yesterday_Bot_ 80%"),
-    ("Unfinished",       "VoiceBot",           "CC_Unfinished_ 10-15days_100%_Voicebot"),
-    ("Unfinished",       "Inbound",            "CC_Verification_calls_after_BOT"),
-    ("Unfinished",       "Inbound",            "CC_Unfinished_Inb_VB"),
-    # Auto-creation
-    ("Auto-creation",    "Predictive (Agent)", "CC_Autocreation_Unsigned_Reapeat_50%_agent"),
-    ("Auto-creation",    "VoiceBot",           "CC_Autocreation_Unsigned_Reapeat_50%Bot"),
-    # Phone confirmation
-    ("Phone confirmation", "VoiceBot",         "CC_Phone_confirmation"),
-    # Inbound (hotline)
-    ("Inbound (hotline)", "Inbound",           "CC_HotLine"),
-    # Telesales
-    ("Telesales",        "Inbound",            "CC Inbound Sleep and Sold"),
-    # Other
-    ("Other",            "Predictive (Agent)", "CC_Callbacks"),
-    ("Other",            "Predictive (Agent)", "СС_Duplicates"),
-)
-
-
-def _normalize_queue_name(name: str) -> str:
-    """Case-insensitive + Cyrillic-СС-to-Latin-CC + whitespace-squash
-    comparison helper. Lets the CC checklist match queues even with
-    typos / locale drift in their Webitel name."""
-    n = (name or "").strip().lower()
-    # СС → cc after lower() → replace Cyrillic с (U+0441) with Latin c.
-    n = n.replace("с", "c")
-    n = " ".join(n.split())
-    return n
 
 COLS = ("name", "id", "calendar", "schema", "type", "enabled", "team", "agents")
 

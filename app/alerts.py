@@ -8,7 +8,9 @@ from .paths import data_dir
 
 ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("queue_checklist",          "🧩 Queues check · Collection", "Автопроверка чек-листа Collection (G1/G2/G3 × Main/APTP/BPTP). Алерт уходит только если есть пробелы."),
-    ("agents_on_break",          "😴 Agents on break > online", "Считает по очередям Collection × {Main, APTP, BPTP}: сколько агентов online vs pause. Алерт, если в любой такой очереди на перерыве больше, чем онлайн."),
+    ("queue_checklist_cc",       "🧩 Queues check · CC",         "Автопроверка чек-листа CC (31 ожидаемая очередь, 7 категорий: Unsigned / Unfinished / Auto-creation / Phone confirmation / Inbound / Telesales / Other). Алерт уходит только если есть пробелы."),
+    ("agents_on_break",          "😴 Agents on break > online · Collection", "Считает по очередям Collection × {Main, APTP, BPTP}: сколько агентов online vs pause. Алерт, если в любой такой очереди на перерыве больше, чем онлайн."),
+    ("agents_on_break_cc",       "😴 Agents on break > online · CC", "То же, что и Collection-вариант, но фильтрует очереди по префиксу CC_* / СС_*. Алерт, если в любой CC-очереди на перерыве больше агентов, чем онлайн."),
     ("agents_chats_unanswered",  "🕒 Agents · chats unanswered > 15min", "Перечисляет агентов, у которых есть открытые чаты, где последнее сообщение от клиента старше 15 минут."),
     ("broken_validation", "🔴 Broken Validation", "Сбой валидации диалога — критично. Поля для фикса: stage, alert_type, destination."),
     ("crm_validation",    "⚠️ CRM Validation",   "Расхождение ответа CRM с ожиданиями. Поля: vars_to_check, problem_variable, crm_error, crm_message."),
@@ -16,10 +18,14 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("generic_error",     "🔴 Error",            "Любая необработанная ошибка ветки бота. Поля: alert_type, stage."),
     ("integration",       "🔴 Integration",      "Сбой внешней интеграции (CRM/AI). Поля: counter, alert_type, conversations_response."),
     ("collection_group",  "🔴 Collection Group", "Ошибка маршрутизации по группе коллекции. Поля: collection_group, dpd, link, destination."),
-    ("dash_outbound_drop",   "📉 Исходящие · падение",   "Алерт, если число исходящих попыток сегодня <50% от среднего за предыдущие 7 дней (на текущий час)."),
-    ("dash_amd_machine_high", "🤖 AMD-MACHINE > 60%",     "Сигнал, если доля MACHINE среди попыток сегодня превышает 60%."),
-    ("dash_handled_low",      "👥 Обработано агентом < 40%", "Сигнал, если процент звонков, обработанных агентом, ниже 40% от попыток сегодня."),
-    ("dash_crm_results_low",  "📒 CRM-результаты < 50% от обработанных", "Сигнал, если число записей в communication_history меньше 50% от обработанных агентом сегодня."),
+    ("dash_outbound_drop",   "📉 Исходящие · падение · Collection",   "Алерт, если число исходящих попыток Collection-очередей сегодня <50% от среднего за предыдущие 7 дней (на текущий час)."),
+    ("dash_outbound_drop_cc","📉 Исходящие · падение · CC",           "То же, но scope = CC-очереди (предик-диалер CC_* / СС_*)."),
+    ("dash_amd_machine_high", "🤖 AMD-MACHINE > 60% · Collection",     "Сигнал, если доля MACHINE среди Collection-попыток сегодня превышает 60%."),
+    ("dash_amd_machine_high_cc", "🤖 AMD-MACHINE > 60% · CC",          "То же, но scope = CC-очереди."),
+    ("dash_handled_low",      "👥 Обработано агентом < 40% · Collection", "Сигнал, если процент звонков, обработанных агентом, ниже 40% от Collection-попыток сегодня."),
+    ("dash_handled_low_cc",   "👥 Обработано агентом < 40% · CC",      "То же, но scope = CC-очереди."),
+    ("dash_crm_results_low",  "📒 CRM-результаты < 50% от обработанных · Collection", "Сигнал, если число записей в communication_history меньше 50% от обработанных агентом сегодня (Collection)."),
+    ("dash_crm_results_low_cc", "📒 CRM-результаты < 50% · CC",         "То же, но scope = CC-очереди."),
     ("ai_audit",              "🤖 AI-аудит · WhatsApp",                  "Полный AI-аудит чатов через Claude (Sonnet/Opus). Запускается по расписанию, рекомендации публикуются в тему компании в Telegram. Поля для фикса: model_kind (sonnet/opus), chat_limit, period_days."),
     ("weekly_review",         "📊 Weekly review · Champion vs Candidate", "Еженедельная сводка: champion-когорта vs candidate-когорта (split по последней цифре телефона). Считает close/prolong/any-pay rates, выдаёт PROMOTE/KEEP decision. Поля: weekday (0=Mon), days (default 7), target_goal (fully_pay/prolong/both), min_lift_pct (default 2.0), min_n (default 50), chat_limit (default 5000)."),
     ("webitel_api_down",      "🚨 Webitel API недоступен",                "Health-check: пингует cheap эндпоинт Webitel; алерт после 2 подряд фейлов и о восстановлении. Без полей. Запуск раз в 5 минут."),
@@ -76,6 +82,36 @@ def save_alerts_config(cfg: dict) -> None:
 
 class TelegramError(Exception):
     pass
+
+
+def telegram_block_for_alert(cfg: dict, template: str) -> dict:
+    """Return the Telegram config block to use for a given alert template.
+
+    CC-sector templates (slug ending in ``_cc``) route to the
+    ``telegram_cc`` block — a second bot / chat dedicated to CC alerts.
+    If ``telegram_cc`` is missing or hasn't been populated (no chat_id),
+    fall back to the default ``telegram`` block so alerts still go out
+    somewhere.
+    """
+    if template.endswith("_cc"):
+        cc = cfg.get("telegram_cc") or {}
+        if cc.get("bot_token") and cc.get("chat_id"):
+            return cc
+    return cfg.get("telegram") or {}
+
+
+def telegram_topic_for_company(tg: dict, company_key: str) -> int | None:
+    """Look up a per-company forum topic id inside a telegram block.
+    Returns None when the block has no topics dict or no entry for
+    this company — caller should then send without ``message_thread_id``."""
+    topics = tg.get("topics") if isinstance(tg, dict) else None
+    if not isinstance(topics, dict):
+        return None
+    tid = topics.get(company_key)
+    try:
+        return int(tid) if tid is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def send_telegram_message(

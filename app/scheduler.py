@@ -438,6 +438,241 @@ def _build_dash_crm_results_low_text(company: Company) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# CC sector variants — same shape, scoped to CC_* / СС_* queues
+# ---------------------------------------------------------------------------
+
+def _build_queue_checklist_cc_text(company: Company) -> Optional[str]:
+    """CC-sector queue checklist. Pulls live queues from Webitel and matches
+    each name against the expected CC catalog in `cc_queues.CC_CHECKLIST`.
+    Sends alert only when there are gaps."""
+    from .cc_queues import CC_CHECKLIST, normalize_queue_name
+    try:
+        client = WebitelClient(company.webitel_host, company.webitel_access_token)
+        agent_queues: list[Queue] = client.list_queues(types=list(AGENT_QUEUE_TYPES))
+    except WebitelError:
+        return None
+    try:
+        chat_queues: list[Queue] = client.list_queues(types=[6])
+    except WebitelError:
+        chat_queues = []
+    visible: dict[str, Queue] = {}
+    for q in list(agent_queues) + list(chat_queues):
+        if not q.enabled:
+            continue
+        visible[normalize_queue_name(q.name)] = q
+    missing: list[tuple[str, str, str]] = []
+    ok = 0
+    for category, channel, expected in CC_CHECKLIST:
+        if normalize_queue_name(expected) in visible:
+            ok += 1
+        else:
+            missing.append((category, channel, expected))
+    if not missing:
+        return None
+    total = len(CC_CHECKLIST)
+    bullets = [
+        f"{category} · {channel} — {name}"
+        for category, channel, name in missing
+    ]
+    return render_alert_html(
+        severity="warning",
+        title="Queues check · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Agents",
+        metrics=[
+            ("Coverage", f"{ok} / {total}"),
+            ("Missing", str(len(missing))),
+            ("Configured", str(ok)),
+        ],
+        bullets=bullets,
+        body="The following CC queues are not enabled or not present:",
+    )
+
+
+def _build_agents_on_break_cc_text(company: Company) -> Optional[str]:
+    """CC variant: filter queues by CC name prefix instead of Collection."""
+    from .cc_queues import is_cc_queue_name
+    try:
+        client = WebitelClient(company.webitel_host, company.webitel_access_token)
+        queues = client.list_queues(types=list(AGENT_QUEUE_TYPES))
+    except WebitelError:
+        return None
+    candidates = [
+        q for q in queues
+        if q.enabled and is_cc_queue_name(q.name or "")
+    ]
+    if not candidates:
+        return None
+
+    def _fetch(q: Queue) -> tuple[Queue, Optional[int], Optional[int]]:
+        try:
+            statuses = client.list_queue_agent_statuses(q.id)
+        except WebitelError:
+            return q, None, None
+        online = sum(1 for s in statuses if s == "online")
+        pause = sum(1 for s in statuses if s == "pause")
+        return q, online, pause
+
+    rows: list[tuple[Queue, int, int]] = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for q, online, pause in pool.map(_fetch, candidates):
+            if online is None or pause is None:
+                continue
+            rows.append((q, online, pause))
+    bad = [(q, o, p) for q, o, p in rows if p > o]
+    if not bad:
+        return None
+    bullets = [f"{q.name} — online={o}, pause={p}" for q, o, p in bad]
+    return render_alert_html(
+        severity="warning",
+        title="Agents on break > online · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Agents",
+        metrics=[("Affected CC queues", str(len(bad)))],
+        bullets=bullets,
+    )
+
+
+def _latest_dash_snapshot_cc(company: Company) -> Optional[dict]:
+    """Pick the freshest dashboard snapshot tagged with the CC sector.
+    Snapshot keys follow ``<period>_<sector>``; we filter to the ones
+    whose key ends with ``_cc``. Returns None if no CC snapshot is in
+    cache yet (operator hasn't opened the CC dashboard)."""
+    try:
+        from .dashboard_cache import load_cache
+    except Exception:
+        return None
+    cache = load_cache(company.key) or {}
+    snaps = cache.get("snapshots") if isinstance(cache, dict) else None
+    if not isinstance(snaps, dict) or not snaps:
+        return None
+    best, best_ts = None, -1
+    for key, snap in snaps.items():
+        if not isinstance(snap, dict):
+            continue
+        if not key.endswith("_cc"):
+            continue
+        ts = int(snap.get("ts_ms") or 0)
+        if ts > best_ts:
+            best_ts = ts
+            best = snap
+    return best
+
+
+def _build_dash_outbound_drop_cc_text(company: Company) -> Optional[str]:
+    snap = _latest_dash_snapshot_cc(company)
+    if not snap:
+        return None
+    today = (snap.get("co_today") or {}).get("total")
+    co_outbound_per_day = list(snap.get("c_outbound") or [])
+    if today is None or len(co_outbound_per_day) < 2:
+        return None
+    today_n = int(today)
+    history = co_outbound_per_day[:-1] or [0]
+    avg = sum(history) / len(history) if history else 0
+    if avg <= 0:
+        return None
+    if today_n >= avg * 0.5:
+        return None
+    drop_pct = round((1 - today_n / avg) * 100)
+    return render_alert_html(
+        severity="warning",
+        title="Outbound · sharp drop · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Voice",
+        metrics=[
+            ("Today", str(today_n)),
+            (f"Avg over {len(history)}d", f"{avg:.0f}"),
+            ("Drop", f"{drop_pct}%"),
+        ],
+    )
+
+
+def _build_dash_amd_machine_high_cc_text(company: Company) -> Optional[str]:
+    snap = _latest_dash_snapshot_cc(company)
+    if not snap:
+        return None
+    co = snap.get("co_today") or {}
+    total = int(co.get("total") or 0)
+    machine = int(co.get("amd_machine") or 0)
+    if total < 50:
+        return None
+    pct = machine * 100 / total
+    if pct <= 60:
+        return None
+    return render_alert_html(
+        severity="warning",
+        title="AMD-MACHINE > 60% · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Voice",
+        metrics=[
+            ("MACHINE", f"{machine} / {total}"),
+            ("Share", f"{pct:.0f}%"),
+        ],
+    )
+
+
+def _build_dash_handled_low_cc_text(company: Company) -> Optional[str]:
+    snap = _latest_dash_snapshot_cc(company)
+    if not snap:
+        return None
+    co = snap.get("co_today") or {}
+    total = int(co.get("total") or 0)
+    handled = int(co.get("handled") or 0)
+    if total < 50:
+        return None
+    pct = handled * 100 / total
+    if pct >= 40:
+        return None
+    return render_alert_html(
+        severity="warning",
+        title="Handled-by-agent < 40% · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="Voice",
+        metrics=[
+            ("Handled", f"{handled} / {total}"),
+            ("Share", f"{pct:.0f}%"),
+        ],
+    )
+
+
+def _build_dash_crm_results_low_cc_text(company: Company) -> Optional[str]:
+    snap = _latest_dash_snapshot_cc(company)
+    if not snap:
+        return None
+    co = snap.get("co_today") or {}
+    handled = int(co.get("handled") or 0)
+    crm = co.get("crm_results_today")
+    if not isinstance(crm, int) or handled < 20:
+        return None
+    pct = crm * 100 / handled
+    if pct >= 50:
+        return None
+    return render_alert_html(
+        severity="warning",
+        title="CRM-results < 50% of handled · CC",
+        company_code=company.code,
+        company_name=company.name,
+        webitel_host=company.webitel_host,
+        category="CRM",
+        metrics=[
+            ("CRM-records", f"{crm} / {handled}"),
+            ("Share", f"{pct:.0f}%"),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase H — health-checks for the WhatsApp pipeline
 # ---------------------------------------------------------------------------
 
@@ -1165,12 +1400,18 @@ def _build_wa_send_time_recommendation_text(company: Company) -> Optional[str]:
 
 TEMPLATE_BUILDERS: dict[str, Callable[[Company], Optional[str]]] = {
     "queue_checklist": _build_queue_checklist_text,
+    "queue_checklist_cc": _build_queue_checklist_cc_text,
     "agents_on_break": _build_agents_on_break_text,
+    "agents_on_break_cc": _build_agents_on_break_cc_text,
     "agents_chats_unanswered": _build_agents_chats_unanswered_text,
     "dash_outbound_drop": _build_dash_outbound_drop_text,
+    "dash_outbound_drop_cc": _build_dash_outbound_drop_cc_text,
     "dash_amd_machine_high": _build_dash_amd_machine_high_text,
+    "dash_amd_machine_high_cc": _build_dash_amd_machine_high_cc_text,
     "dash_handled_low": _build_dash_handled_low_text,
+    "dash_handled_low_cc": _build_dash_handled_low_cc_text,
     "dash_crm_results_low": _build_dash_crm_results_low_text,
+    "dash_crm_results_low_cc": _build_dash_crm_results_low_cc_text,
     "webitel_api_down": _build_webitel_api_down_text,
     "wa_chat_volume_drop": _build_wa_chat_volume_drop_text,
     "wa_bot_silent": _build_wa_bot_silent_text,
@@ -1239,6 +1480,9 @@ class AlertScheduler:
         if not bot_alerts:
             return
         companies = {c.key: c for c in load_companies()}
+        # Default Collection telegram target (token, chat_id, topic via
+        # ensure_company_topic). CC alerts re-resolve to telegram_cc
+        # per-alert below.
         tg = cfg.get("telegram") or {}
         token = tg.get("bot_token", "")
         chat_id = tg.get("chat_id", "")
@@ -1327,11 +1571,31 @@ class AlertScheduler:
                     changed = True
                     if text is None:
                         continue
+                    # CC alerts (slug ending in _cc) route to telegram_cc
+                    # block when configured; everything else uses the
+                    # default Collection bot+chat resolved upfront.
+                    if template.endswith("_cc"):
+                        from .alerts import (
+                            telegram_block_for_alert,
+                            telegram_topic_for_company,
+                        )
+                        cc_tg = telegram_block_for_alert(cfg, template)
+                        send_token = cc_tg.get("bot_token") or token
+                        send_chat = cc_tg.get("chat_id") or chat_id
+                        send_topic = telegram_topic_for_company(cc_tg, ckey)
+                        if send_topic is None and send_chat == chat_id:
+                            # fallback to default chat → use the
+                            # Collection per-company topic
+                            send_topic = topic_id
+                    else:
+                        send_token = token
+                        send_chat = chat_id
+                        send_topic = topic_id
                     try:
                         send_telegram_message(
-                            token, chat_id, text,
+                            send_token, send_chat, text,
                             parse_mode="HTML",
-                            message_thread_id=topic_id,
+                            message_thread_id=send_topic,
                         )
                     except TelegramError:
                         pass

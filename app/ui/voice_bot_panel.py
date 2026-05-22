@@ -46,12 +46,26 @@ def _expected_agent_prefix(company_key: str) -> str:
 
 
 class VoiceBotOverviewPanel(ttk.Frame):
-    """Empty placeholder — общая сводка voice-бота. Контент добавим позже,
-    пока нужен только сам таб первым в notebook."""
+    """Voice-bot summary card grid for this company.
+
+    Pulls recent ElevenLabs conversations for the agent registered in
+    voice_bot_config (``elevenlabs_agent_id``), filters by selected
+    period (today / 7d / 30d), and aggregates basic operational metrics:
+    total calls, successful vs failed, duration, and ElevenLabs cost
+    (credits). The cost requires a per-conversation detail fetch, so a
+    parallel thread pool drives the second pass."""
+
+    PERIODS = (
+        ("voice_bot_overview_period_today", 1),
+        ("voice_bot_overview_period_7d", 7),
+        ("voice_bot_overview_period_30d", 30),
+    )
 
     def __init__(self, master: tk.Misc, company: Company) -> None:
         super().__init__(master)
         self._company = company
+        self._cfg: dict = load_config(company.key)
+        self._agent_id: str = str(self._cfg.get("elevenlabs_agent_id") or "").strip()
 
         ttk.Label(
             self,
@@ -65,13 +79,263 @@ class VoiceBotOverviewPanel(ttk.Frame):
             text=f"{code} — {company.name} ({company.country})",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        if not self._agent_id:
+            ttk.Label(
+                self,
+                text=t("voice_bot_conv_no_agent"),
+                foreground=TBD_FG, wraplength=900, justify="left",
+            ).pack(anchor="w", padx=14, pady=12)
+            return
+
+        # ---- Toolbar: period selector + refresh + status ----
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill="x", padx=12, pady=(0, 8))
         ttk.Label(
-            self,
-            text=t("voice_bot_overview_placeholder"),
+            toolbar,
+            text=t("voice_bot_overview_period_label") + ":",
             foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(8, 12))
+        ).pack(side="left")
+        self._period_var = tk.StringVar(value=t(self.PERIODS[0][0]))
+        period_box = ttk.Combobox(
+            toolbar,
+            textvariable=self._period_var,
+            values=[t(k) for k, _ in self.PERIODS],
+            state="readonly",
+            width=16,
+        )
+        period_box.pack(side="left", padx=(6, 12))
+        period_box.bind("<<ComboboxSelected>>", lambda _e: self._refresh())
+        self._refresh_btn = ttk.Button(
+            toolbar,
+            text=t("voice_bot_conv_refresh"),
+            command=self._refresh,
+            style="Accent.TButton",
+        )
+        self._refresh_btn.pack(side="left")
+        self._status = ttk.Label(toolbar, text="", foreground=META_FG)
+        self._status.pack(side="left", padx=(12, 0))
+
+        # ---- Cards grid ----
+        cards = ttk.Frame(self)
+        cards.pack(fill="x", padx=12, pady=(0, 12))
+        self._cards: dict[str, ttk.Label] = {}
+        defs = [
+            ("total", t("voice_bot_overview_card_total"), 0, 0),
+            ("successful", t("voice_bot_overview_card_successful"), 0, 1),
+            ("failed", t("voice_bot_overview_card_failed"), 0, 2),
+            ("duration_total", t("voice_bot_overview_card_duration_total"), 1, 0),
+            ("duration_avg", t("voice_bot_overview_card_duration_avg"), 1, 1),
+            ("duration_max", t("voice_bot_overview_card_duration_max"), 1, 2),
+            ("cost_total", t("voice_bot_overview_card_cost_total"), 2, 0),
+            ("cost_avg", t("voice_bot_overview_card_cost_avg"), 2, 1),
+            ("success_rate", t("voice_bot_overview_card_success_rate"), 2, 2),
+        ]
+        for col in range(3):
+            cards.columnconfigure(col, weight=1, uniform="card")
+        for key, label, row, col in defs:
+            box = ttk.LabelFrame(cards, text=label, padding=10)
+            box.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
+            big = ttk.Label(
+                box, text="—",
+                font=("Segoe UI", 18, "bold"),
+                foreground=TEXT_FG,
+            )
+            big.pack(anchor="w")
+            self._cards[key] = big
+
+        # Auto-load on open
+        self.after(50, self._refresh)
+
+    # ------------------------------------------------------------------
+    # Refresh / aggregation
+    # ------------------------------------------------------------------
+
+    def _period_days(self) -> int:
+        current = self._period_var.get()
+        for key, days in self.PERIODS:
+            if t(key) == current:
+                return days
+        return 7
+
+    def _refresh(self) -> None:
+        if not get_elevenlabs_key(self._company.key):
+            messagebox.showwarning(
+                t("voice_bot_key_dialog_title"),
+                t("voice_bot_key_missing"),
+                parent=self.winfo_toplevel(),
+            )
+            return
+        days = self._period_days()
+        self._refresh_btn.configure(state="disabled")
+        self._status.configure(
+            text=t("voice_bot_overview_loading"), foreground=META_FG,
+        )
+        threading.Thread(
+            target=self._refresh_worker, args=(days,), daemon=True,
+        ).start()
+
+    def _refresh_worker(self, days: int) -> None:
+        import time as _time
+        from concurrent.futures import ThreadPoolExecutor
+        try:
+            from ..elevenlabs import list_conversations, get_conversation
+            api_key = get_elevenlabs_key(self._company.key)
+            cutoff = int(_time.time()) - days * 86400
+            convs: list[dict] = []
+            cursor = ""
+            for _ in range(20):  # hard pagination cap
+                r = list_conversations(
+                    agent_id=self._agent_id, page_size=100,
+                    cursor=cursor, api_key=api_key,
+                )
+                page = r.get("conversations") or []
+                convs.extend(page)
+                if not r.get("has_more"):
+                    break
+                page_min = min(
+                    (c.get("start_time_unix_secs") or 0) for c in page
+                ) if page else 0
+                if page_min and page_min < cutoff:
+                    break
+                cursor = r.get("next_cursor") or ""
+                if not cursor:
+                    break
+            in_period = [
+                c for c in convs
+                if (c.get("start_time_unix_secs") or 0) >= cutoff
+            ]
+            # Sequential progress callback to status during detail fetch
+            cost_total = 0
+            details_done = 0
+            details_total = len(in_period)
+            if not self.winfo_exists():
+                return
+            self.after(
+                0,
+                lambda: self._status.configure(
+                    text=t("voice_bot_overview_loading_details").format(
+                        done=0, total=details_total,
+                    ),
+                    foreground=META_FG,
+                ),
+            )
+
+            def fetch_cost(conv: dict) -> int:
+                try:
+                    det = get_conversation(
+                        conv["conversation_id"], api_key=api_key,
+                    )
+                    return int(((det.get("metadata") or {}).get("cost") or 0))
+                except Exception:  # noqa: BLE001
+                    return 0
+
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                costs = []
+                for i, cost in enumerate(ex.map(fetch_cost, in_period)):
+                    costs.append(cost)
+                    if self.winfo_exists() and (i + 1) % 5 == 0:
+                        done = i + 1
+                        self.after(
+                            0,
+                            lambda d=done, t_=details_total:
+                                self._status.configure(
+                                    text=t("voice_bot_overview_loading_details").format(
+                                        done=d, total=t_,
+                                    ),
+                                    foreground=META_FG,
+                                ),
+                        )
+                cost_total = sum(costs)
+            stats = _aggregate_conversations(in_period, cost_total)
+            err: Optional[str] = None
+        except Exception as exc:  # noqa: BLE001
+            stats, err = None, str(exc)
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._render_stats(stats, err))
+
+    def _render_stats(
+        self, stats: Optional[dict], err: Optional[str],
+    ) -> None:
+        self._refresh_btn.configure(state="normal")
+        if err:
+            self._status.configure(text=err, foreground=ERR_FG)
+            return
+        if not stats:
+            self._status.configure(
+                text=t("voice_bot_overview_no_data"),
+                foreground=TBD_FG,
+            )
+            for lbl in self._cards.values():
+                lbl.configure(text="—")
+            return
+
+        total = stats["total"]
+        successful = stats["successful"]
+        failed = stats["failed"]
+        rate = (
+            f"{(successful * 100 / total):.0f}%" if total else "—"
+        )
+        self._cards["total"].configure(text=str(total))
+        self._cards["successful"].configure(text=str(successful))
+        self._cards["failed"].configure(text=str(failed))
+        self._cards["duration_total"].configure(
+            text=_fmt_hms(stats["duration_total"]),
+        )
+        self._cards["duration_avg"].configure(
+            text=_fmt_hms(stats["duration_avg"]),
+        )
+        self._cards["duration_max"].configure(
+            text=_fmt_hms(stats["duration_max"]),
+        )
+        self._cards["cost_total"].configure(
+            text=f"{stats['cost_total']} cr",
+        )
+        self._cards["cost_avg"].configure(
+            text=(
+                f"{stats['cost_avg']:.1f} cr" if total else "—"
+            ),
+        )
+        self._cards["success_rate"].configure(text=rate)
+        self._status.configure(
+            text=t("voice_bot_overview_loaded").format(
+                n=total, days=self._period_days(),
+            ),
+            foreground=OK_FG,
+        )
+
+
+def _aggregate_conversations(convs: list[dict], cost_total: int) -> dict:
+    total = len(convs)
+    successful = sum(1 for c in convs if c.get("call_successful") == "success")
+    failed = sum(1 for c in convs if c.get("call_successful") == "failure")
+    durations = [int(c.get("call_duration_secs") or 0) for c in convs]
+    dur_total = sum(durations)
+    dur_avg = (dur_total / total) if total else 0
+    dur_max = max(durations) if durations else 0
+    cost_avg = (cost_total / total) if total else 0.0
+    return {
+        "total": total,
+        "successful": successful,
+        "failed": failed,
+        "duration_total": dur_total,
+        "duration_avg": int(dur_avg),
+        "duration_max": dur_max,
+        "cost_total": cost_total,
+        "cost_avg": cost_avg,
+    }
+
+
+def _fmt_hms(secs: int) -> str:
+    s = int(secs or 0)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60:02d}s"
+    h = s // 3600
+    m = (s % 3600) // 60
+    return f"{h}h {m:02d}m"
 
 
 def _normalize_sip_header_to_dyn_var(name: str) -> str:

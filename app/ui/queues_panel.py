@@ -311,17 +311,32 @@ class QueuesPanel(ttk.Frame):
 
         add_filter("Сектор:", self._f_sector, ["Все", "Collection", "КЦ"], 12)
         add_filter("Статус:", self._f_enabled, ["Все", "Включенные"], 14)
-        add_filter("Префикс:", self._f_coll, ["Все", "Только Collection"], 18)
-        add_filter("Группа:", self._f_group, ["Все", "G1", "G2", "G3"], 8)
-        add_filter("Тип:", self._f_sub, ["Все", "Main", "APTP", "BPTP"], 10)
+        if self._sector == SECTOR_CC:
+            # CC-специфичный фильтр: категория из CC_CHECKLIST. Filter values
+            # are the unique categories in the order they appear in the
+            # catalog.
+            seen = []
+            for cat, _ch, _n in CC_CHECKLIST:
+                if cat not in seen:
+                    seen.append(cat)
+            self._f_cc_category = tk.StringVar(value="Все")
+            add_filter("Категория:", self._f_cc_category, ["Все", *seen], 22)
+            self._f_cc_category.trace_add(
+                "write", lambda *_: self._apply_filters(),
+            )
+            traced_vars = (self._f_sector, self._f_enabled)
+        else:
+            # Collection-специфичные фильтры — у CC скрыты.
+            add_filter("Префикс:", self._f_coll, ["Все", "Только Collection"], 18)
+            add_filter("Группа:", self._f_group, ["Все", "G1", "G2", "G3"], 8)
+            add_filter("Тип:", self._f_sub, ["Все", "Main", "APTP", "BPTP"], 10)
+            self._f_cc_category = None
+            traced_vars = (
+                self._f_sector, self._f_enabled,
+                self._f_coll, self._f_group, self._f_sub,
+            )
 
-        for var in (
-            self._f_sector,
-            self._f_enabled,
-            self._f_coll,
-            self._f_group,
-            self._f_sub,
-        ):
+        for var in traced_vars:
             var.trace_add("write", lambda *_: self._apply_filters())
 
         body = ttk.Frame(self)
@@ -583,6 +598,19 @@ class QueuesPanel(ttk.Frame):
             return False
         if self._f_enabled.get() == "Включенные" and not q.enabled:
             return False
+        # CC sector: filter by expected category from CC_CHECKLIST.
+        if self._sector == SECTOR_CC and self._f_cc_category is not None:
+            cat_filter = self._f_cc_category.get()
+            if cat_filter and cat_filter != "Все":
+                want_names = {
+                    _normalize_queue_name(name)
+                    for cat, _ch, name in CC_CHECKLIST
+                    if cat == cat_filter
+                }
+                if _normalize_queue_name(q.name) not in want_names:
+                    return False
+            return True
+        # Collection-mode: legacy prefix/group/type filters.
         name = q.name or ""
         if self._f_coll.get() == "Только Collection" and not name.lstrip().lower().startswith("collection"):
             return False

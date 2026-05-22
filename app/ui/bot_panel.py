@@ -20,7 +20,7 @@ class BotPanel(ttk.Frame):
 
         if kind == "agents":
             from .queues_panel import QueuesPanel
-            queues = QueuesPanel(self.notebook, company)
+            queues = QueuesPanel(self.notebook, company, self._sector)
             self.notebook.add(queues, text=t("tab_queues"))
 
             from .conversations_panel import ConversationsPanel

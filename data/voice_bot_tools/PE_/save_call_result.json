@@ -1,0 +1,199 @@
+{
+  "type": "webhook",
+  "name": "PE_save_call_result",
+  "description": "Register the outcome of the call in Prestamo365 CRM. Call this exactly once, right before end_call, regardless of outcome (promise / refusal / wrong person / unreachable). Pass the structured result; loan_id / collector_id / phone come from dynamic variables.",
+  "disable_interruptions": false,
+  "force_pre_tool_speech": false,
+  "pre_tool_speech": "auto",
+  "tool_call_sound": null,
+  "tool_call_sound_behavior": "auto",
+  "tool_error_handling_mode": "auto",
+  "execution_mode": "immediate",
+  "api_schema": {
+    "url": "https://api.prestamo365.pe/api/hooks/webitel/phone_result",
+    "method": "POST",
+    "path_params_schema": [],
+    "query_params_schema": [],
+    "request_body_schema": {
+      "id": "body",
+      "type": "object",
+      "description": "{  \n\"loan_id\": \"{{loan_id}}\",  \n\"user_id\": \"{{user_id}}\",  \n\"collector_id\": \"49\",  \n\"call_type\": \"${call_type}\",\n\"phone_number\": \"${destination}\",  \n\"contact_type\": \"${contact_type}\",  \n\"contact_result\": \"${result}\",  \n\"promise_type\": \"${promise_type}\",  \n\"promise_date\": \"${ptp_date}\",  \n\"promise_amount\": \"${ptp_amount}\",  \n\"comment\": \"${comment}\",\n\"webitel_call_id\": \"${uuid}\"\n}",
+      "properties": [
+        {
+          "id": "loan_id",
+          "type": "string",
+          "value_type": "dynamic_variable",
+          "description": "",
+          "dynamic_variable": "sip_loan_id",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": false
+        },
+        {
+          "id": "collector_id",
+          "type": "string",
+          "value_type": "constant",
+          "description": "",
+          "dynamic_variable": "",
+          "constant_value": "49",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "call_type",
+          "type": "string",
+          "value_type": "constant",
+          "description": "",
+          "dynamic_variable": "",
+          "constant_value": "type_outgoing_voicebot_call",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "direction",
+          "type": "string",
+          "value_type": "constant",
+          "description": "",
+          "dynamic_variable": "",
+          "constant_value": "direction_outbound",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "phone_number",
+          "type": "string",
+          "value_type": "dynamic_variable",
+          "description": "",
+          "dynamic_variable": "sip_caller_id",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "contact_type",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Type of contact made during the call. Pick exactly one of four values:\n- contact_client: you actually spoke with the borrower and their identity was confirmed (they said they are the loan holder).\n- contact_third_party: you spoke with someone other than the borrower (family member, employer, neighbour, friend, wrong-number recipient who admitted being someone else).\n- contact_unknown: a connection was established and there was some interaction, but the other side did not state whether they are the borrower or a third party (e.g. they answered but refused to identify themselves before hanging up).\n- contact_negative: there was no real human connection at all — voicemail, answering machine, ringing-only, silence, fast busy, or a dropped line before any meaningful exchange.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": [
+            "contact_client",
+            "contact_third_party",
+            "contact_unknown",
+            "contact_negative"
+          ],
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "contact_result",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Outcome of the call. The allowed set depends on contact_type.\n\nIf contact_type=contact_negative (no real human connection), pick exactly one of:\n- result_phone_out_of_reach: the carrier reported the subscriber is unreachable right now — phone is switched off, out of coverage, or the network announcement says the number cannot be contacted at this moment.\n- result_number_is_invalid: the carrier announcement says the number does not exist, is disconnected, has been reassigned, or is otherwise not a valid subscriber line.\n- result_voicemail: the call was answered by a voicemail / answering-machine recording (automated greeting inviting the caller to leave a message); no live person was on the line.\n- result_no_answer: the line rang until the dialer timeout and nobody picked up — no voicemail, no busy, no human.\n- result_silence: the line was answered but stayed completely silent — no greeting from a human, no voicemail, no audible background, just silence until the bot hung up.\n- result_busy: the carrier returned a busy signal — the subscriber is on another call and the line is engaged.\n- result_drop: someone answered and the call dropped almost immediately (within the first seconds) before any meaningful exchange — either the customer hung up on hearing the greeting, the carrier cut the line, or there was an audio failure.\n\nIf contact_type=contact_unknown (connection happened but the other side never said whether they are the borrower or a third party), pick exactly one of:\n- result_hung_up: the person on the line ended the call without ever identifying themselves — they hung up mid-greeting, refused to answer who they are, or cut the conversation before any identification could happen.\n- result_call_back_later: the person on the line asked to be called back at another time without identifying themselves (e.g. \"llámeme más tarde\" / \"ahora no puedo\") and ended the call before identity was established.\n\nIf contact_type=contact_third_party (the person on the line confirmed they are NOT the borrower — family member, employer, neighbour, current owner of a reassigned number, etc.), pick exactly one of:\n- result_will_transmit_information: the third party agreed to pass our contact / phone number to the borrower so the borrower can call us back (e.g. \"sí, le doy su número\", \"le digo que llame\", \"le paso el recado para que se comunique\").\n- result_refusal_to_transfer_information: the third party refused to pass our contact / phone number to the borrower — they will not relay our call-back request.\n- result_hung_up: the third party hung up after revealing they are not the borrower, before agreeing or refusing to relay the message — call ended too quickly to classify their intent.\n- result_does_not_know_the_client: the third party stated they do not know the borrower at all — wrong number, the line was reassigned, or the borrower's name is unfamiliar to them.\n\nIf contact_type=contact_client (you actually spoke with the borrower and their identity was confirmed), pick exactly one of:\n- result_promise_of_payment: the borrower made a concrete payment commitment with a specific amount, date, and payment method. When you pick this, also fill promise_type / promise_date / promise_amount accordingly.\n- result_refusal_to_pay: the borrower talked with you but explicitly refused to pay, refused to commit to any date, or stated they cannot / will not pay; no promise was secured.\n- result_paid_according_to_the_client: the borrower claims they have already paid the loan (in full or partially) and the payment has not yet been reflected in the CRM — they will need to provide proof of payment for the human collector to verify.\n- result_call_back_later: the borrower asked to be called back at another time (e.g. \"ahora no puedo hablar\", \"llámeme más tarde\", \"estoy ocupado\") after confirming identity, and no payment decision was reached on this call.\n- result_hung_up: the borrower hung up after confirming identity but before any payment outcome was reached — they cut the call short, refused to keep talking, or ended the conversation without committing to anything actionable.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": [
+            "result_phone_out_of_reach",
+            "result_number_is_invalid",
+            "result_voicemail",
+            "result_no_answer",
+            "result_silence",
+            "result_busy",
+            "result_drop",
+            "result_hung_up",
+            "result_call_back_later",
+            "result_will_transmit_information",
+            "result_refusal_to_transfer_information",
+            "result_does_not_know_the_client",
+            "result_promise_of_payment",
+            "result_refusal_to_pay",
+            "result_paid_according_to_the_client"
+          ],
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "promise_type",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Type of payment promise. Fill ONLY when contact_type=contact_client AND contact_result=result_promise_of_payment. In every other case (any other contact_type, any other contact_result) return an empty string. When applicable, pick exactly one of:\n- promise_full_payment: the borrower committed to paying the full outstanding amount of the loan by the agreed date.\n- promise_partial_payment: the borrower committed to paying only part of the outstanding amount — less than the full debt but at least the approved partial / minimum payment.\n- promise_discount: the borrower accepted a negotiated discount offer and committed to paying the reduced (discounted) amount instead of the full balance.\n- promise_prolongation: the borrower committed to extending / rolling over the loan — paying the prolongation fee or partial cost to push the due date further, rather than paying the principal now.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": [
+            "promise_full_payment",
+            "promise_partial_payment",
+            "promise_discount",
+            "promise_prolongation",
+            ""
+          ],
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "promise_date",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Promised payment date in strict format DD.MM.YYYY (e.g. 03.06.2026). REQUIRED whenever promise_type is non-empty — must be a real, concrete date confirmed with the borrower during the call. Resolve relative phrases (mañana, pasado mañana, el lunes, en tres días, esta semana, etc.) against today's date in Peru (America/Lima timezone). Do not invent a date the borrower did not confirm. If promise_type is an empty string (no promise was made), return an empty string here as well.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "promise_amount",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Amount the borrower committed to pay, as a plain number only — no currency symbol, no thousand separators, no \"soles\" / \"PEN\" / \"S/\" suffix. Examples: \"150\", \"1200.50\". REQUIRED whenever promise_type is non-empty — must be the exact figure agreed with the borrower; do not invent or round. If promise_type is an empty string (no promise was made), return an empty string here as well.",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        },
+        {
+          "id": "comment",
+          "type": "string",
+          "value_type": "llm_prompt",
+          "description": "Resumen conciso en español del resultado de toda la llamada, escrito para el gestor humano de Préstamo365 que hará el seguimiento. 3–5 oraciones. Incluir, en este orden: (1) a quién contactó el agente y el contexto del crédito (saldo pendiente en soles, días de mora); (2) la posición / reacción inicial del cliente; (3) los pasos de negociación que ocurrieron durante la llamada (descuento ofrecido, pago parcial, prolongación, etc.); (4) el resultado final — si se obtuvo una promesa, indicar monto exacto, fecha exacta y método de pago (Yape, Plin, BCP, Interbank, BBVA, Agente, transferencia, efectivo, etc.); si no hubo promesa, indicar por qué (negativa, tercero, buzón de voz, etc.). Estilo: español neutro latinoamericano, tiempo pasado, factual, sin emojis, sin comillas, sin markdown. Usar valores reales de la conversación; no inventar. Ejemplo: \"El agente de Préstamo365 contactó a Martha Chiri por una deuda de 272 soles con 25 días de mora. Martha inicialmente accedió a pagar al día siguiente. El agente le ofreció un descuento especial, permitiéndole liquidar la cuenta por 223 soles si pagaba antes del 25 de mayo. Martha aceptó la oferta y se comprometió a pagar 223 soles por BCP hoy a la 1 PM. La llamada concluyó con el compromiso de pago confirmado.\"",
+          "dynamic_variable": "",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": true
+        }
+      ],
+      "required": false,
+      "value_type": "llm_prompt"
+    },
+    "request_headers": [
+      {
+        "type": "value",
+        "name": "Webitel-Header",
+        "value": "4323f240-c69f-45ec-8748-fb503aa65a4b"
+      }
+    ],
+    "content_type": "application/json",
+    "auth_connection": null
+  },
+  "assignments": [],
+  "response_timeout_secs": 20,
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {
+      "sip_loan_id": {
+        "type": "string_literal",
+        "value": ""
+      },
+      "sip_crm_phone": {
+        "type": "string_literal",
+        "value": ""
+      }
+    }
+  },
+  "response_mocks": []
+}

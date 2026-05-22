@@ -590,6 +590,21 @@ CO_VOICE_FIRST_MESSAGE = (
 )
 
 
+# ElevenLabs tool ids per company, keyed by tool short-name (matches the
+# file under `data/voice_bot_tools/<COMPANY>/<name>.json`). Used by the
+# CRM-results panel to PATCH the tool when the operator clicks
+# «Обновить tool в ElevenLabs». Add new entries here as new tools / new
+# companies appear.
+VOICE_BOT_TOOL_IDS: dict[str, dict[str, str]] = {
+    "CO_": {
+        "save_call_result": "tool_6401krh3cx1sfwbtwq455cmmbpj8",
+    },
+    "PE_": {
+        "save_call_result": "tool_5401ks5st5j9fp1be4rqkswt6eg6",
+    },
+}
+
+
 SEEDS: dict[str, dict] = {
     "CO_": {
         "agent_provider": "elevenlabs",

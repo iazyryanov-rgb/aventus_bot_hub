@@ -28,6 +28,8 @@ class BotPanel(ttk.Frame):
                 VoiceBotOverviewPanel,
                 VoiceBotPromptsPanel,
             )
+            from .voice_bot_results_panel import VoiceBotResultsPanel
+            from .voice_bot_conversations_panel import VoiceBotConversationsPanel
             self.notebook.add(
                 VoiceBotOverviewPanel(self.notebook, company),
                 text=t("wa_bot_tab_overview"),
@@ -39,6 +41,14 @@ class BotPanel(ttk.Frame):
             self.notebook.add(
                 VoiceBotPromptsPanel(self.notebook, company),
                 text=t("wa_bot_tab_prompts"),
+            )
+            self.notebook.add(
+                VoiceBotResultsPanel(self.notebook, company),
+                text=t("voice_bot_tab_results"),
+            )
+            self.notebook.add(
+                VoiceBotConversationsPanel(self.notebook, company),
+                text=t("voice_bot_tab_conversations"),
             )
 
         if kind == "whatsapp":

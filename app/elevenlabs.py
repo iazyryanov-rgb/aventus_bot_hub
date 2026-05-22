@@ -31,6 +31,7 @@ prod-агента в ElevenLabs, по кнопке «Push» — залить о�
 """
 from __future__ import annotations
 
+import copy
 import json
 import urllib.error
 import urllib.parse
@@ -48,22 +49,60 @@ class ElevenLabsError(Exception):
 
 
 # ---------- key persistence ----------
+#
+# Storage shape in `data/api_keys.json`:
+#   {
+#     "elevenlabs": "sk_global_fallback",         # global / shared key
+#     "elevenlabs_by_company": {                  # optional per-company overrides
+#       "PE_": "sk_prestamo365_workspace_key",
+#       "CO_": "sk_credito365_workspace_key"
+#     }
+#   }
+#
+# Resolution order for `get_elevenlabs_key(company_key)`:
+#   1. per-company override if `company_key` is given AND a non-empty key is
+#      registered for it in `elevenlabs_by_company`;
+#   2. global `elevenlabs` key otherwise.
 
-def get_elevenlabs_key() -> str:
-    return str(load_api_keys().get("elevenlabs") or "").strip()
-
-
-def set_elevenlabs_key(key: str) -> None:
+def get_elevenlabs_key(company_key: Optional[str] = None) -> str:
     keys = load_api_keys()
-    if key:
-        keys["elevenlabs"] = key.strip()
+    if company_key:
+        per = (keys.get("elevenlabs_by_company") or {}).get(company_key) or ""
+        if str(per).strip():
+            return str(per).strip()
+    return str(keys.get("elevenlabs") or "").strip()
+
+
+def set_elevenlabs_key(
+    key: str, *, company_key: Optional[str] = None,
+) -> None:
+    """Store an ElevenLabs key. Without `company_key` updates the global
+    fallback. With `company_key` updates the per-company override
+    (creating the `elevenlabs_by_company` sub-dict on demand). Empty
+    `key` deletes the corresponding entry."""
+    keys = load_api_keys()
+    if company_key:
+        per_map = keys.get("elevenlabs_by_company")
+        if not isinstance(per_map, dict):
+            per_map = {}
+        if key:
+            per_map[company_key] = key.strip()
+        else:
+            per_map.pop(company_key, None)
+        if per_map:
+            keys["elevenlabs_by_company"] = per_map
+        else:
+            keys.pop("elevenlabs_by_company", None)
     else:
-        keys.pop("elevenlabs", None)
+        if key:
+            keys["elevenlabs"] = key.strip()
+        else:
+            keys.pop("elevenlabs", None)
     save_api_keys(keys)
 
 
-def is_configured() -> bool:
-    return bool(get_elevenlabs_key())
+def is_configured(company_key: Optional[str] = None) -> bool:
+    return bool(get_elevenlabs_key(company_key))
 
 
 # ---------- low-level HTTP ----------
@@ -160,3 +199,262 @@ def update_agent_prompt(
         raise ElevenLabsError("nothing to update (both fields are None)")
     body = {"conversation_config": {"agent": agent_block}}
     return _request("PATCH", f"/v1/convai/agents/{agent_id}", api_key=api_key, body=body)
+
+
+# ---------- Tools (webhook tools attached to an agent) ----------
+
+def get_tool(tool_id: str, *, api_key: Optional[str] = None) -> dict:
+    """Full tool config — same shape that PATCH expects back."""
+    if not tool_id:
+        raise ElevenLabsError("tool_id is required")
+    return _request("GET", f"/v1/convai/tools/{tool_id}", api_key=api_key)
+
+
+def _normalize_tool_for_patch(spec: dict) -> dict:
+    """Convert ElevenLabs tool *export* shape into PATCH-acceptable shape.
+
+    Reverse-engineered against `GET /v1/convai/tools/<id>` of a live tool
+    (`tool_config` slice of the response equals what PATCH expects back).
+
+    Cumulative transformations:
+
+      1. ``dynamic_variables.dynamic_variable_placeholders.<name>``:
+         export ``{"type":"string_literal","value":<v>}`` → PATCH ``<v>``.
+
+      2. ``api_schema.request_headers``:
+         export list ``[{"type":"value","name":<n>,"value":<v>}]``
+         → PATCH dict ``{<n>: <v>}``.
+
+      3. ``api_schema.path_params_schema``:
+         export ``[]`` (list) → PATCH ``{}`` (empty dict).
+
+      4. ``api_schema.query_params_schema``:
+         export ``[]`` (list, empty) → PATCH ``None``.
+
+      5. ``api_schema.request_body_schema``:
+         - drop ``id`` and ``value_type`` keys (export-only labels);
+         - ``required`` becomes a list of property IDs aggregated from
+           per-property ``required: true`` flags;
+         - ``properties`` becomes a dict keyed by property ``id``, with
+           ``id`` / ``value_type`` / ``required`` stripped from each
+           property value.
+
+      6. Top-level ``response_mocks`` is NOT a ``tool_config`` field —
+         it lives next to ``tool_config`` in GET responses. Drop it from
+         the PATCH payload.
+
+    Returns a deep copy; the input dict is untouched.
+    """
+    out = copy.deepcopy(spec)
+    out.pop("response_mocks", None)
+
+    dvars = out.get("dynamic_variables")
+    if isinstance(dvars, dict):
+        placeholders = dvars.get("dynamic_variable_placeholders")
+        if isinstance(placeholders, dict):
+            for k, v in list(placeholders.items()):
+                if isinstance(v, dict) and "value" in v:
+                    placeholders[k] = v.get("value")
+
+    api = out.get("api_schema")
+    if isinstance(api, dict):
+        headers = api.get("request_headers")
+        if isinstance(headers, list):
+            new_headers: dict = {}
+            for h in headers:
+                if isinstance(h, dict) and h.get("name"):
+                    new_headers[h["name"]] = h.get("value", "")
+            api["request_headers"] = new_headers
+
+        if isinstance(api.get("path_params_schema"), list):
+            api["path_params_schema"] = {}
+        if isinstance(api.get("query_params_schema"), list):
+            api["query_params_schema"] = (
+                None if not api["query_params_schema"] else api["query_params_schema"]
+            )
+        if "response_body_schema" not in api:
+            api["response_body_schema"] = None
+
+        rbs = api.get("request_body_schema")
+        if isinstance(rbs, dict):
+            required_ids: list[str] = []
+            props = rbs.get("properties")
+            if isinstance(props, list):
+                new_props: dict = {}
+                for p in props:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = p.get("id")
+                    if not pid:
+                        continue
+                    if p.get("required"):
+                        required_ids.append(pid)
+                    new_props[pid] = {
+                        kk: vv for kk, vv in p.items()
+                        if kk not in ("id", "value_type", "required")
+                    }
+                rbs["properties"] = new_props
+            elif isinstance(props, dict):
+                for pid, p in list(props.items()):
+                    if not isinstance(p, dict):
+                        continue
+                    if p.pop("required", False):
+                        required_ids.append(pid)
+                    p.pop("value_type", None)
+                    p.pop("id", None)
+            rbs.pop("id", None)
+            rbs.pop("value_type", None)
+            rbs["required"] = required_ids
+
+    return out
+
+
+# ---------- Conversations (transcripts) ----------
+
+def list_conversations(
+    *,
+    agent_id: str = "",
+    page_size: int = 30,
+    cursor: str = "",
+    api_key: Optional[str] = None,
+) -> dict:
+    """Page through conversations the API key can see. Returns the raw
+    ElevenLabs response: `{"conversations": [...], "next_cursor": "...",
+    "has_more": bool}`. Each conversation entry has `conversation_id`,
+    `agent_id`, `agent_name`, `start_time_unix_secs`, `call_duration_secs`,
+    `status`, `call_successful`, `transcript_summary`, `termination_reason`,
+    `message_count`, etc.
+    """
+    qs_parts = [f"page_size={int(page_size)}"]
+    if agent_id:
+        qs_parts.append(f"agent_id={urllib.parse.quote(agent_id)}")
+    if cursor:
+        qs_parts.append(f"cursor={urllib.parse.quote(cursor)}")
+    qs = "&".join(qs_parts)
+    return _request("GET", f"/v1/convai/conversations?{qs}", api_key=api_key)
+
+
+def get_conversation(
+    conversation_id: str, *, api_key: Optional[str] = None,
+) -> dict:
+    """Full conversation detail: transcript (turns with tool_calls/results),
+    metadata, analysis (call_successful, transcript_summary,
+    data_collection_results), has_audio."""
+    if not conversation_id:
+        raise ElevenLabsError("conversation_id is required")
+    return _request(
+        "GET", f"/v1/convai/conversations/{conversation_id}", api_key=api_key,
+    )
+
+
+def get_conversation_audio(
+    conversation_id: str, *, api_key: Optional[str] = None,
+) -> bytes:
+    """Raw audio bytes (mp3 by default) of the whole conversation.
+    Heavy — only fetch on demand."""
+    if not conversation_id:
+        raise ElevenLabsError("conversation_id is required")
+    key = (api_key or get_elevenlabs_key()).strip()
+    if not key:
+        raise ElevenLabsError("ElevenLabs API key not configured")
+    req = urllib.request.Request(
+        API_BASE + f"/v1/convai/conversations/{conversation_id}/audio",
+        headers={"xi-api-key": key, "Accept": "audio/*"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        msg = e.read().decode("utf-8", errors="replace")
+        raise ElevenLabsError(
+            f"HTTP {e.code} GET /v1/convai/conversations/{conversation_id}/audio: {msg[:400]}"
+        ) from e
+    except urllib.error.URLError as e:
+        raise ElevenLabsError(
+            f"GET /v1/convai/conversations/{conversation_id}/audio: {e}"
+        ) from e
+
+
+def extract_save_call_result_from_transcript(
+    conversation: dict,
+) -> Optional[dict]:
+    """Walk the conversation transcript looking for a `save_call_result`
+    tool call. Returns `{"params": <body sent to CRM>, "status_code":
+    <HTTP code>, "response": <CRM response body>}` if found, else None.
+    """
+    transcript = (conversation or {}).get("transcript") or []
+    if not isinstance(transcript, list):
+        return None
+    for turn in transcript:
+        if not isinstance(turn, dict):
+            continue
+        tool_calls = turn.get("tool_calls") or []
+        tool_results = turn.get("tool_results") or []
+        for i, call in enumerate(tool_calls):
+            if not isinstance(call, dict):
+                continue
+            name = (
+                call.get("tool_name")
+                or call.get("name")
+                or (call.get("params_as_json") or {}).get("__tool_name__", "")
+            )
+            if not isinstance(name, str):
+                continue
+            if "save_call_result" not in name.lower():
+                continue
+            params = (
+                call.get("params_as_json")
+                or call.get("parameters")
+                or call.get("arguments")
+                or {}
+            )
+            if isinstance(params, str):
+                try:
+                    params = json.loads(params)
+                except (ValueError, TypeError):
+                    params = {"_raw": params}
+            res: dict = {}
+            if i < len(tool_results) and isinstance(tool_results[i], dict):
+                tr = tool_results[i]
+                res = {
+                    "status_code": (
+                        tr.get("response_status_code")
+                        or tr.get("status_code")
+                        or tr.get("status")
+                    ),
+                    "response": (
+                        tr.get("result_value")
+                        or tr.get("response")
+                        or tr.get("body")
+                    ),
+                }
+            return {
+                "name": name,
+                "params": params,
+                **res,
+            }
+    return None
+
+
+def update_tool(
+    tool_id: str, body: dict, *, api_key: Optional[str] = None,
+) -> dict:
+    """Replace the tool spec on ElevenLabs side. `body` must be the full
+    tool JSON (same shape as the ElevenLabs export the hub stores under
+    `data/voice_bot_tools/<COMPANY>/<name>.json`). PATCH expects the
+    spec wrapped in `tool_config`, and a couple of export-only fields
+    (`dynamic_variable_placeholders` as `{type, value}`) need flattening
+    — we accept the export shape and normalize here. Requires editor
+    role on the tool; viewer-only keys will receive HTTP 403."""
+    if not tool_id:
+        raise ElevenLabsError("tool_id is required")
+    if not isinstance(body, dict):
+        raise ElevenLabsError("body must be a dict")
+    if "tool_config" in body:
+        inner = body["tool_config"]
+        payload = {"tool_config": _normalize_tool_for_patch(inner)}
+    else:
+        payload = {"tool_config": _normalize_tool_for_patch(body)}
+    return _request(
+        "PATCH", f"/v1/convai/tools/{tool_id}", api_key=api_key, body=payload,
+    )

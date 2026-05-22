@@ -24,7 +24,25 @@ from ..elevenlabs import (
 )
 from ..i18n import t
 from ..voice_bot_config import SIP_DYNAMIC_VARS, load_config, save_config
-from .colors import ERR_FG, META_FG, OK_FG, TEXT_FG
+from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
+
+
+def _expected_agent_prefix(company_key: str) -> str:
+    """Конвенция именования голосовых агентов в ElevenLabs: company key без
+    trailing ``_``, плюс ``1`` если последний символ не цифра. Примеры:
+
+      * ``CO_``  → ``CO1``
+      * ``CO2_`` → ``CO2``
+      * ``PE_``  → ``PE1``
+      * ``AR_``  → ``AR1``
+
+    Используется как префикс фильтра агентов в picker'е (агент должен
+    называться ``<prefix>_<что-то>``).
+    """
+    base = (company_key or "").rstrip("_")
+    if not base:
+        return ""
+    return base if base[-1].isdigit() else base + "1"
 
 
 class VoiceBotOverviewPanel(ttk.Frame):
@@ -244,7 +262,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
         )
 
     def _pick_agent_dialog(self) -> None:
-        if not get_elevenlabs_key():
+        if not get_elevenlabs_key(self._company.key):
             messagebox.showwarning(
                 t("voice_bot_key_dialog_title"),
                 t("voice_bot_key_missing"),
@@ -258,7 +276,9 @@ class VoiceBotPromptsPanel(ttk.Frame):
 
     def _list_agents_worker(self) -> None:
         try:
-            agents = list_agents()
+            agents = list_agents(
+                api_key=get_elevenlabs_key(self._company.key),
+            )
             err: Optional[str] = None
         except ElevenLabsError as exc:
             agents, err = [], str(exc)
@@ -287,21 +307,51 @@ class VoiceBotPromptsPanel(ttk.Frame):
             )
             return
 
+        prefix = _expected_agent_prefix(self._company.key)
+        total = len(agents)
+
+        def _matches(a: dict) -> bool:
+            if not prefix:
+                return True
+            n = (a.get("name") or "").strip()
+            return n == prefix or n.startswith(prefix + "_")
+
+        filtered = [a for a in agents if _matches(a)] if prefix else list(agents)
+        show_all_fallback = bool(prefix) and not filtered
+        visible_agents = agents if show_all_fallback else filtered
+
         dialog = tk.Toplevel(self.winfo_toplevel())
         dialog.title(t("voice_bot_list_agents"))
         dialog.transient(self.winfo_toplevel())
         dialog.grab_set()
+
+        if prefix:
+            if show_all_fallback:
+                label_text = t("voice_bot_agent_filter_none").format(
+                    prefix=prefix, total=total,
+                )
+                label_color = TBD_FG
+            else:
+                label_text = t("voice_bot_agent_filter_match").format(
+                    prefix=prefix, n=len(filtered), total=total,
+                )
+                label_color = META_FG
+            ttk.Label(
+                dialog, text=label_text, foreground=label_color,
+                wraplength=600, justify="left",
+            ).pack(anchor="w", padx=10, pady=(10, 4))
+
         tree = ttk.Treeview(
             dialog, columns=("name", "agent_id"),
-            show="headings", height=min(15, max(5, len(agents))),
+            show="headings", height=min(15, max(5, len(visible_agents))),
         )
         tree.heading("name", text=t("voice_bot_agent_name"))
         tree.heading("agent_id", text=t("voice_bot_agent_id"))
         tree.column("name", width=320, anchor="w")
         tree.column("agent_id", width=320, anchor="w")
-        for a in agents:
+        for a in visible_agents:
             tree.insert("", "end", values=(a.get("name") or "—", a.get("agent_id") or ""))
-        tree.pack(fill="both", expand=True, padx=10, pady=10)
+        tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         def use_selected() -> None:
             sel = tree.selection()
@@ -334,7 +384,9 @@ class VoiceBotPromptsPanel(ttk.Frame):
 
     def _pull_worker(self, agent_id: str) -> None:
         try:
-            agent = get_agent(agent_id)
+            agent = get_agent(
+                agent_id, api_key=get_elevenlabs_key(self._company.key),
+            )
             prompt, first_msg = extract_prompt(agent)
             err: Optional[str] = None
         except ElevenLabsError as exc:
@@ -408,6 +460,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
                 agent_id,
                 system_prompt=prompt,
                 first_message=first_msg,
+                api_key=get_elevenlabs_key(self._company.key),
             )
             err: Optional[str] = None
         except ElevenLabsError as exc:
@@ -432,7 +485,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _require_key_and_id(self) -> bool:
-        if not get_elevenlabs_key():
+        if not get_elevenlabs_key(self._company.key):
             messagebox.showwarning(
                 t("voice_bot_key_dialog_title"),
                 t("voice_bot_key_missing"),

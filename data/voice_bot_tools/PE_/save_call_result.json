@@ -17,7 +17,7 @@
     "request_body_schema": {
       "id": "body",
       "type": "object",
-      "description": "{  \n\"loan_id\": \"{{loan_id}}\",  \n\"user_id\": \"{{user_id}}\",  \n\"collector_id\": \"49\",  \n\"call_type\": \"${call_type}\",\n\"phone_number\": \"${destination}\",  \n\"contact_type\": \"${contact_type}\",  \n\"contact_result\": \"${result}\",  \n\"promise_type\": \"${promise_type}\",  \n\"promise_date\": \"${ptp_date}\",  \n\"promise_amount\": \"${ptp_amount}\",  \n\"comment\": \"${comment}\",\n\"webitel_call_id\": \"${uuid}\"\n}",
+      "description": "{  \n\"loan_id\": \"${loan_id}\",  \n\"user_id\": \"${user_id}\",  \n\"collector_id\": \"${collector_id}\",  \n\"call_type\": \"${call_type}\",\n\"phone_number\": \"${destination}\",  \n\"contact_type\": \"${contact_type}\",  \n\"contact_result\": \"${result}\",  \n\"promise_type\": \"${promise_type}\",  \n\"promise_date\": \"${ptp_date}\",  \n\"promise_amount\": \"${ptp_amount}\",  \n\"comment\": \"${history_uuid}\",\n\"webitel_call_id\": \"${uuid}\"\n}",
       "properties": [
         {
           "id": "loan_id",
@@ -25,6 +25,17 @@
           "value_type": "dynamic_variable",
           "description": "",
           "dynamic_variable": "sip_loan_id",
+          "constant_value": "",
+          "enum": null,
+          "is_system_provided": false,
+          "required": false
+        },
+        {
+          "id": "user_id",
+          "type": "string",
+          "value_type": "dynamic_variable",
+          "description": "",
+          "dynamic_variable": "sip_user_id",
           "constant_value": "",
           "enum": null,
           "is_system_provided": false,

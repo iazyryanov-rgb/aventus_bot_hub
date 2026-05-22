@@ -90,14 +90,6 @@ class ChatAuditPanel(ttk.Frame):
             text=f"{code} — {company.name} ({company.country})",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 6))
-        ttk.Label(
-            self,
-            text=t("audit_help"),
-            foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 8))
-
         # Controls
         controls = ttk.Frame(self)
         controls.pack(fill="x", padx=14, pady=(0, 6))
@@ -146,12 +138,6 @@ class ChatAuditPanel(ttk.Frame):
         ttk.Button(
             controls, text=t("audit_set_key"), command=self._open_key_dialog,
         ).pack(side="right")
-
-        ttk.Label(
-            self,
-            text=t("audit_alerts_hint"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 4))
 
         self._status = ttk.Label(self, text="", foreground=META_FG)
         self._status.pack(anchor="w", padx=14, pady=(2, 6))

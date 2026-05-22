@@ -186,10 +186,6 @@ class VoiceBotPromptsPanel(ttk.Frame):
         ttk.Label(
             self, text=t("voice_bot_prompt_main"), font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=12, pady=(8, 2))
-        ttk.Label(
-            self, text=t("voice_bot_prompt_main_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
         self._main_prompt = tk.Text(self, wrap="word")
         self._main_prompt.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self._main_prompt.insert("1.0", str(self._cfg.get("main_prompt") or ""))
@@ -198,23 +194,15 @@ class VoiceBotPromptsPanel(ttk.Frame):
         ttk.Label(
             self, text=t("voice_bot_first_message"), font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=12, pady=(4, 2))
-        ttk.Label(
-            self, text=t("voice_bot_first_message_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
         self._first_message = tk.Text(self, height=3, wrap="word")
         self._first_message.pack(fill="x", padx=12, pady=(0, 8))
         self._first_message.insert("1.0", str(self._cfg.get("first_message") or ""))
 
-        # ---- Подсказка по dynamic_variables ----
+        # ---- SIP dynamic_variables (только список placeholder'ов) ----
         vars_box = ttk.LabelFrame(
             self, text=t("voice_bot_section_dynamic_vars"), padding=8,
         )
         vars_box.pack(fill="x", padx=12, pady=(0, 12))
-        ttk.Label(
-            vars_box, text=t("voice_bot_dynamic_vars_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(0, 4))
         ttk.Label(
             vars_box,
             text="  ".join(f"{{{{ {v} }}}}" for v in SIP_DYNAMIC_VARS),

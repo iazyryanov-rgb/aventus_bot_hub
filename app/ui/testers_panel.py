@@ -68,14 +68,6 @@ class TestersPanel(ttk.Frame):
             text=f"{code} — {company.name} ({company.country})",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
-        ttk.Label(
-            self,
-            text=t("testers_help"),
-            foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 8))
-
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x", padx=14, pady=(0, 6))
         ttk.Button(toolbar, text=t("btn_add"), command=self._add).pack(side="left")

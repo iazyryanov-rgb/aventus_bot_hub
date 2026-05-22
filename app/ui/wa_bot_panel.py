@@ -485,14 +485,6 @@ class WaBotMappingPanel(ttk.Frame):
         # --- Lookup vars table (editable + can show CRM response) --------
         lookup = ttk.LabelFrame(self, text=t("wa_bot_section_lookup"), padding=10)
         lookup.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        ttk.Label(
-            lookup, text=t("wa_bot_lookup_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(0, 6))
-        ttk.Label(
-            lookup, text=t("wa_bot_edit_hint"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(0, 4))
         lookup_tree_box = ttk.Frame(lookup)
         lookup_tree_box.pack(fill="both", expand=True)
         self._lookup_tree = ttk.Treeview(
@@ -533,14 +525,6 @@ class WaBotMappingPanel(ttk.Frame):
         # --- Result POST body table (editable + schema compare) ----------
         result = ttk.LabelFrame(self, text=t("wa_bot_section_result"), padding=10)
         result.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        ttk.Label(
-            result, text=t("wa_bot_result_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(0, 6))
-        ttk.Label(
-            result, text=t("wa_bot_edit_hint"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(0, 4))
         result_tree_box = ttk.Frame(result)
         result_tree_box.pack(fill="both", expand=True)
         self._result_tree = ttk.Treeview(
@@ -912,13 +896,6 @@ class WaBotFunctionsPanel(ttk.Frame):
         self._company = company
         self._cfg: dict = load_config(company.key)
 
-        ttk.Label(
-            self,
-            text=t("wa_bot_functions_help"),
-            foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(12, 4))
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=12, pady=(8, 4))
@@ -1078,10 +1055,6 @@ class WaBotPromptsPanel(ttk.Frame):
         ttk.Label(
             self, text=t("wa_bot_prompt_main"), font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=12, pady=(12, 2))
-        ttk.Label(
-            self, text=t("wa_bot_prompt_main_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
         self._main_prompt = tk.Text(self, height=10, wrap="word")
         self._main_prompt.pack(fill="x", padx=12, pady=(0, 8))
         self._main_prompt.insert("1.0", gpt.get("main_prompt") or "")
@@ -1090,10 +1063,6 @@ class WaBotPromptsPanel(ttk.Frame):
         ttk.Label(
             self, text=t("wa_bot_prompt_secondary"), font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=12, pady=(4, 2))
-        ttk.Label(
-            self, text=t("wa_bot_prompt_secondary_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=12, pady=(0, 4))
         self._sec_prompt = tk.Text(self, height=4, wrap="word")
         self._sec_prompt.pack(fill="x", padx=12, pady=(0, 8))
         self._sec_prompt.insert("1.0", gpt.get("secondary_prompt") or "")
@@ -1174,10 +1143,6 @@ class WaBotPromptsPanel(ttk.Frame):
             command=self._toggle_selected,
         ).pack(side="left", padx=(6, 0))
 
-        ttk.Label(
-            struct, text=t("wa_bot_prompts_hint"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", pady=(6, 0))
 
         # ---- Сгенерированное тело ----
         out = ttk.LabelFrame(
@@ -1505,13 +1470,6 @@ class WaBotBuilderPanel(ttk.Frame):
         gpt.setdefault("builder", dict(DEFAULT_BUILDER))
         b = {**DEFAULT_BUILDER, **(gpt.get("builder") or {})}
 
-        ttk.Label(
-            self,
-            text=t("wa_bot_builder_help"),
-            foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=12, pady=(12, 8))
 
         # ---- Параметры запроса ----
         cfg_box = ttk.LabelFrame(self, text=t("wa_bot_builder_params"), padding=10)

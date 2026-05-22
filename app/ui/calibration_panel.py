@@ -67,11 +67,6 @@ class CalibrationPanel(ttk.Frame):
             text=f"{code} — {self._company.name} ({self._company.country})",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 6))
-        ttk.Label(
-            self, text=t("calib_help"),
-            foreground=META_FG, wraplength=900, justify="left",
-        ).pack(anchor="w", padx=14, pady=(0, 8))
-
     def _build_status_section(self) -> None:
         sec = ttk.LabelFrame(self, text=t("calib_section_status"), padding=10)
         sec.pack(fill="x", padx=12, pady=(8, 4))

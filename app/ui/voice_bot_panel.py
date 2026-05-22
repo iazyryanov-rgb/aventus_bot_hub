@@ -23,6 +23,7 @@ from ..elevenlabs import (
     update_agent_prompt,
 )
 from ..i18n import t
+from ..sectors import DEFAULT_SECTOR, SECTORS
 from ..voice_bot_config import SIP_DYNAMIC_VARS, load_config, save_config
 from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
 
@@ -61,10 +62,14 @@ class VoiceBotOverviewPanel(ttk.Frame):
         ("voice_bot_overview_period_30d", 30),
     )
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
         self._agent_id: str = str(self._cfg.get("elevenlabs_agent_id") or "").strip()
 
         ttk.Label(
@@ -392,10 +397,14 @@ class VoiceBotMappingPanel(ttk.Frame):
     Read-only; edits to the schema happen in Webitel UI.
     """
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
         self._schema: Optional[dict] = None
 
         ttk.Label(
@@ -701,10 +710,14 @@ class VoiceBotPromptsPanel(ttk.Frame):
       * Подсказка по dynamic_variables (SIP-headers из bridge-ноды).
     """
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
 
         # ---- Заголовок + agent_id + API key dialog ----
         ttk.Label(
@@ -808,7 +821,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
 
     def _save_local(self) -> None:
         self._sync_into_cfg()
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._status.configure(text=t("voice_bot_saved_local"), foreground=OK_FG)
 
     # ------------------------------------------------------------------
@@ -1052,7 +1065,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
             )
             return
         # Локальный save после успешного push — фиксируем как «деплой».
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._status.configure(text=t("voice_bot_pushed"), foreground=OK_FG)
 
     # ------------------------------------------------------------------

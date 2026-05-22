@@ -14,6 +14,7 @@ from ..data import (
     save_bot,
 )
 from ..i18n import t
+from ..sectors import DEFAULT_SECTOR, SECTORS, sector_label_key
 from ..webitel import WebitelClient, WebitelError, find_whatsapp_infobip_prod
 
 BG = "#ffffff"
@@ -265,7 +266,7 @@ class CompaniesTree(ttk.Frame):
 
         self._companies = load_companies()
         self._co_rows: dict[str, Row] = {}
-        self._bot_rows: dict[tuple[str, str], Row] = {}
+        self._bot_rows: dict[tuple[str, str, str], Row] = {}
         self._bot_errors: dict[tuple[str, str], bool] = {}
         self._populate()
 
@@ -323,19 +324,33 @@ class CompaniesTree(ttk.Frame):
             co_row.set_status("warn" if not is_company_complete(c.key) else None)
             self._co_rows[c.key] = co_row
 
-            for kind in ("voice", "whatsapp", "agents"):
-                on_click = lambda key=c.key, k=kind: self._open_bot_panel(key, k)
-                bot_row = Row(
+            for sector in SECTORS:
+                sector_row = Row(
                     self._list,
-                    label=self._bot_label(c, kind),
+                    label=t(sector_label_key(sector)),
                     indent=28,
-                    on_menu=lambda e, key=c.key, k=kind: self._show_bot_menu(e, key, k),
-                    on_click=on_click,
+                    on_menu=lambda _e: None,
+                    on_click=lambda _v=None: None,
                     on_check=lambda _v: self._refresh_analytics(),
                 )
-                bot_row.pack(fill="x")
-                self._bot_rows[(c.key, kind)] = bot_row
-                self._refresh_bot_status(c.key, kind)
+                sector_row.pack(fill="x")
+                for kind in ("voice", "whatsapp", "agents"):
+                    on_click = (
+                        lambda key=c.key, k=kind, sec=sector:
+                            self._open_bot_panel(key, k, sec)
+                    )
+                    bot_row = Row(
+                        self._list,
+                        label=self._bot_label(c, kind),
+                        indent=56,
+                        on_menu=lambda e, key=c.key, k=kind, sec=sector:
+                            self._show_bot_menu(e, key, k, sec),
+                        on_click=on_click,
+                        on_check=lambda _v: self._refresh_analytics(),
+                    )
+                    bot_row.pack(fill="x")
+                    self._bot_rows[(c.key, sector, kind)] = bot_row
+                    self._refresh_bot_status(c.key, kind, sector)
 
     def _reload_companies(self) -> None:
         for w in list(self._list.winfo_children()):
@@ -361,7 +376,10 @@ class CompaniesTree(ttk.Frame):
         finally:
             menu.grab_release()
 
-    def _show_bot_menu(self, event: tk.Event, company_key: str, kind: str) -> None:
+    def _show_bot_menu(
+        self, event: tk.Event, company_key: str, kind: str,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         menu = tk.Menu(self, tearoff=0)
         if kind == "whatsapp":
             menu.add_command(
@@ -406,10 +424,11 @@ class CompaniesTree(ttk.Frame):
             row = self._co_rows.get(c.key)
             if row and row.is_checked():
                 companies_checked.append(c.key)
-            for kind in ("voice", "whatsapp", "agents"):
-                br = self._bot_rows.get((c.key, kind))
-                if br and br.is_checked():
-                    bots_checked.append((c.key, kind))
+            for sector in SECTORS:
+                for kind in ("voice", "whatsapp", "agents"):
+                    br = self._bot_rows.get((c.key, sector, kind))
+                    if br and br.is_checked():
+                        bots_checked.append((c.key, kind))
         return companies_checked, bots_checked
 
     def _analytics_eligible(
@@ -445,12 +464,17 @@ class CompaniesTree(ttk.Frame):
         from .analytics_panel import AnalyticsPanel
         self._on_open_panel(lambda parent: AnalyticsPanel(parent, objs, kind))
 
-    def _open_bot_panel(self, company_key: str, kind: str) -> None:
+    def _open_bot_panel(
+        self, company_key: str, kind: str,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         company = next((c for c in self._companies if c.key == company_key), None)
         if not company or not self._on_open_panel:
             return
         from .bot_panel import BotPanel
-        self._on_open_panel(lambda parent: BotPanel(parent, company, kind))
+        self._on_open_panel(
+            lambda parent: BotPanel(parent, company, kind, sector)
+        )
 
     def _edit_whatsapp_bot(self, company_key: str) -> None:
         company = next((c for c in self._companies if c.key == company_key), None)
@@ -463,8 +487,11 @@ class CompaniesTree(ttk.Frame):
             on_saved=lambda c: self._refresh_bot_status(c.key, "whatsapp"),
         )
 
-    def _refresh_bot_status(self, company_key: str, kind: str) -> None:
-        row = self._bot_rows.get((company_key, kind))
+    def _refresh_bot_status(
+        self, company_key: str, kind: str,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
+        row = self._bot_rows.get((company_key, sector, kind))
         if not row:
             return
         if self._bot_errors.get((company_key, kind)):

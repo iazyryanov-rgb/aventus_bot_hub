@@ -24,6 +24,7 @@ from typing import Optional
 from ..crm_lookup import call_crm_by_phone, fetch_active_loan_phone
 from ..data import Company, load_raw
 from ..i18n import t
+from ..sectors import DEFAULT_SECTOR, SECTORS
 from ..wa_bot_overview import ArmMetrics
 from ..wa_bot_config import (
     DEFAULT_BUILDER,
@@ -96,9 +97,13 @@ class WaBotOverviewPanel(ttk.Frame):
     _BG_GRAD_HI = (74, 222, 128)    # конец (зелёный)
     _FG_TEXT = "#111827"
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
         self._expanded = {"champion": True, "candidate": True}
         self._report = None
         self._cells: dict = {}  # for redraw on toggle
@@ -422,10 +427,14 @@ class WaBotMappingPanel(ttk.Frame):
     «Обзор» — отдельный (пока пустой) таб для общей сводки, а здесь живёт
     именно маппинг."""
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg = load_config(company.key, self._sector)
         cfg = self._cfg
 
         ttk.Label(
@@ -700,7 +709,7 @@ class WaBotMappingPanel(ttk.Frame):
             while len(items) <= idx:
                 items.append({})
             items[idx][cfg_field] = new_val
-            save_config(self._company.key, self._cfg)
+            save_config(self._company.key, self._cfg, self._sector)
             self._edit_status.configure(
                 text=t("wa_bot_edit_saved"), foreground=OK_FG,
             )
@@ -891,10 +900,14 @@ def _parse_post_body(data: str) -> dict:
 
 
 class WaBotFunctionsPanel(ttk.Frame):
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
 
 
         body = ttk.Frame(self)
@@ -982,7 +995,7 @@ class WaBotFunctionsPanel(ttk.Frame):
             "parameters": {"type": "object", "properties": {}},
             "enum_descriptions": {},
         })
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._refresh_fn_list()
         self._fn_list.selection_clear(0, "end")
         self._fn_list.selection_set("end")
@@ -997,7 +1010,7 @@ class WaBotFunctionsPanel(ttk.Frame):
         fns = (self._cfg.get("gpt") or {}).get("functions") or []
         if 0 <= idx < len(fns):
             fns.pop(idx)
-            save_config(self._company.key, self._cfg)
+            save_config(self._company.key, self._cfg, self._sector)
             self._refresh_fn_list()
 
     def _fn_save_current(self) -> None:
@@ -1020,7 +1033,7 @@ class WaBotFunctionsPanel(ttk.Frame):
             "description": self._fn_desc.get("1.0", "end").strip(),
             "parameters": params,
         }
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._refresh_fn_list()
         self._fn_list.selection_set(idx)
         self._fn_status.configure(text=t("wa_bot_saved"), foreground=OK_FG)
@@ -1038,10 +1051,14 @@ class WaBotPromptsPanel(ttk.Frame):
       * Сгенерированное тело запроса — обновляется по нажатию кнопки.
     """
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
         gpt = self._cfg.setdefault("gpt", {})
         gpt.setdefault("main_prompt", "")
         gpt.setdefault("secondary_prompt", "")
@@ -1431,7 +1448,7 @@ class WaBotPromptsPanel(ttk.Frame):
 
     def _save_all(self) -> None:
         self._sync_prompts_into_cfg()
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._regenerate()
         self._status.configure(text=t("wa_bot_saved"), foreground=OK_FG)
 
@@ -1462,10 +1479,14 @@ class WaBotBuilderPanel(ttk.Frame):
     body, который потом подставляется в Webitel-схему как payload
     `httpRequest` к `/v1/responses`."""
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._cfg: dict = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._cfg: dict = load_config(company.key, self._sector)
         gpt = self._cfg.setdefault("gpt", {})
         gpt.setdefault("builder", dict(DEFAULT_BUILDER))
         b = {**DEFAULT_BUILDER, **(gpt.get("builder") or {})}
@@ -1659,7 +1680,7 @@ class WaBotBuilderPanel(ttk.Frame):
     def _save(self) -> None:
         gpt = self._cfg.setdefault("gpt", {})
         gpt["builder"] = self._gather()
-        save_config(self._company.key, self._cfg)
+        save_config(self._company.key, self._cfg, self._sector)
         self._status.configure(text=t("wa_bot_saved"), foreground=OK_FG)
 
 
@@ -1708,9 +1729,13 @@ class WaBotSendersPanel(ttk.Frame):
     in-process cache lives in `app.infobip` so flipping between tabs
     doesn't hit Infobip every time."""
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
 
         ttk.Label(
             self,

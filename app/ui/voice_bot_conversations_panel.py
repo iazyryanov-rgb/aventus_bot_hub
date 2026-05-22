@@ -26,6 +26,7 @@ from ..elevenlabs import (
     list_conversations,
 )
 from ..i18n import t
+from ..sectors import DEFAULT_SECTOR, SECTORS
 from ..voice_bot_config import load_config
 from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
 
@@ -54,10 +55,14 @@ def _fmt_duration(secs: Optional[int]) -> str:
 class VoiceBotConversationsPanel(ttk.Frame):
     """List recent ElevenLabs conversations for this company's agent."""
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        cfg = load_config(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        cfg = load_config(company.key, self._sector)
         self._agent_id: str = str(cfg.get("elevenlabs_agent_id") or "").strip()
         # Detail cache: conversation_id → full detail dict (avoids re-pulling
         # when the operator reopens the same row).

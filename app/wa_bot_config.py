@@ -1,11 +1,14 @@
-"""WA-bot configuration per company.
+"""WA-bot configuration per company per sector.
 
 Source of truth для логики и промптов WhatsApp-Infobip-бота. Bot Hub
 читает/правит этот конфиг, потом отдельный «apply»-шаг (придёт позже)
 будет переписывать соответствующие узлы Webitel-схемы при выкатке нового
 билда.
 
-Config persisted to `data/wa_bot_config/<COMPANY_KEY>.json`.
+Config persisted to `data/wa_bot_config/<COMPANY_KEY>/<sector>.json`
+(``<sector>`` = ``cc`` or ``collection``). Legacy
+``data/wa_bot_config/<COMPANY_KEY>.json`` is migrated to the
+``collection`` sector on first read.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ from typing import Optional
 
 from .data import load_raw, save_raw
 from .paths import data_dir
+from .sectors import DEFAULT_SECTOR, SECTORS
 
 
 GATEWAY_NAME = "WhatsApp-Infobip"
@@ -225,20 +229,23 @@ DEFAULT_BUILDER = {
 }
 
 
-SEEDS: dict[str, dict] = {
+SEEDS: dict[str, dict[str, dict]] = {
     "CO_": {
-        "gateway_name": GATEWAY_NAME,
-        "crm_lookup_url": "https://api.credito365.co/api/partner/webitel/client-info?phone={user}",
-        "crm_lookup_vars": CO_CRM_LOOKUP_VARS,
-        "result_post_url": "https://api.credito365.co/api/partner/webitel/robot_phone_result_v2",
-        "result_post_fields": CO_RESULT_BODY_FIELDS,
-        "gpt": {
-            "model": "gpt-4.1-mini",
-            "main_prompt": CO_MAIN_PROMPT,
-            "secondary_prompt": CO_SECONDARY_PROMPT,
-            "functions": CO_GPT_FUNCTIONS,
-            "builder": dict(DEFAULT_BUILDER),
+        "collection": {
+            "gateway_name": GATEWAY_NAME,
+            "crm_lookup_url": "https://api.credito365.co/api/partner/webitel/client-info?phone={user}",
+            "crm_lookup_vars": CO_CRM_LOOKUP_VARS,
+            "result_post_url": "https://api.credito365.co/api/partner/webitel/robot_phone_result_v2",
+            "result_post_fields": CO_RESULT_BODY_FIELDS,
+            "gpt": {
+                "model": "gpt-4.1-mini",
+                "main_prompt": CO_MAIN_PROMPT,
+                "secondary_prompt": CO_SECONDARY_PROMPT,
+                "functions": CO_GPT_FUNCTIONS,
+                "builder": dict(DEFAULT_BUILDER),
+            },
         },
+        "cc": {},
     },
 }
 
@@ -375,21 +382,30 @@ def build_request_body(cfg: dict) -> dict:
 
 # ---------- persistence ----------
 
-def config_path(company_key: str):
+def config_path(company_key: str, sector: str = DEFAULT_SECTOR):
+    return data_dir() / "wa_bot_config" / company_key / f"{sector}.json"
+
+
+def _legacy_config_path(company_key: str):
+    """Pre-sector path. Kept for one-shot migration."""
     return data_dir() / "wa_bot_config" / f"{company_key}.json"
 
 
-def load_config(company_key: str) -> dict:
-    p = config_path(company_key)
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            pass
-    # Fallback to seed.
-    seed = SEEDS.get(company_key)
-    if seed:
-        return json.loads(json.dumps(seed))  # deep copy
+def _migrate_legacy(company_key: str) -> None:
+    legacy = _legacy_config_path(company_key)
+    if not legacy.exists() or legacy.is_dir():
+        return
+    target = config_path(company_key, DEFAULT_SECTOR)
+    if target.exists():
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
+    except OSError:
+        pass
+
+
+def _empty_cfg() -> dict:
     return {
         "gateway_name": GATEWAY_NAME,
         "crm_lookup_url": "",
@@ -405,8 +421,29 @@ def load_config(company_key: str) -> dict:
     }
 
 
-def save_config(company_key: str, cfg: dict) -> None:
-    p = config_path(company_key)
+def load_config(company_key: str, sector: str = DEFAULT_SECTOR) -> dict:
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    _migrate_legacy(company_key)
+    p = config_path(company_key, sector)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    # Fallback to seed (per-sector seed).
+    seed = (SEEDS.get(company_key) or {}).get(sector) or {}
+    if seed:
+        return json.loads(json.dumps(seed))  # deep copy
+    return _empty_cfg()
+
+
+def save_config(
+    company_key: str, cfg: dict, sector: str = DEFAULT_SECTOR,
+) -> None:
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    p = config_path(company_key, sector)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(

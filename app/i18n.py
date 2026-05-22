@@ -17,6 +17,9 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
     "btn_analytics":           {"RU": "📊 Аналитика",          "ENG": "📊 Analytics",   "ES": "📊 Analítica"},
     "btn_sync_webitel":        {"RU": "Sync с Webitel",        "ENG": "Sync with Webitel","ES": "Sincronizar con Webitel"},
     # bot panel tabs
+    # sectors
+    "sector_cc":               {"RU": "CC",                    "ENG": "CC",             "ES": "CC"},
+    "sector_collection":       {"RU": "Collection",            "ENG": "Collection",     "ES": "Collection"},
     "tab_queues":              {"RU": "Контроль очередей",     "ENG": "Queue control",  "ES": "Control de colas"},
     "tab_chats":               {"RU": "Чаты",                  "ENG": "Chats",          "ES": "Chats"},
     "tab_alerts":              {"RU": "Алерты",                "ENG": "Alerts",         "ES": "Alertas"},

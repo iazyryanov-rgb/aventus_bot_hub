@@ -39,6 +39,7 @@ from ..elevenlabs import (
 )
 from ..i18n import t
 from ..paths import data_dir
+from ..sectors import DEFAULT_SECTOR, SECTORS
 from ..voice_bot_config import VOICE_BOT_TOOL_IDS
 from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
 
@@ -82,12 +83,44 @@ HIERARCHIES: dict[str, dict] = {
 }
 
 
-def _tool_file(company_key: str) -> Path:
-    return data_dir() / "voice_bot_tools" / company_key / "save_call_result.json"
+def _tool_file(
+    company_key: str, sector: str = DEFAULT_SECTOR,
+) -> Path:
+    return (
+        data_dir()
+        / "voice_bot_tools" / company_key / sector / "save_call_result.json"
+    )
 
 
-def _load_tool(company_key: str) -> Optional[dict]:
-    p = _tool_file(company_key)
+def _legacy_tool_file(company_key: str) -> Path:
+    """Pre-sector path. Kept for one-shot migration."""
+    return (
+        data_dir()
+        / "voice_bot_tools" / company_key / "save_call_result.json"
+    )
+
+
+def _migrate_legacy_tool(company_key: str) -> None:
+    legacy = _legacy_tool_file(company_key)
+    if not legacy.exists() or legacy.is_dir():
+        return
+    target = _tool_file(company_key, DEFAULT_SECTOR)
+    if target.exists():
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
+    except OSError:
+        pass
+
+
+def _load_tool(
+    company_key: str, sector: str = DEFAULT_SECTOR,
+) -> Optional[dict]:
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    _migrate_legacy_tool(company_key)
+    p = _tool_file(company_key, sector)
     if not p.exists():
         return None
     try:
@@ -96,10 +129,14 @@ def _load_tool(company_key: str) -> Optional[dict]:
         return None
 
 
-def _save_tool(company_key: str, tool: dict) -> None:
-    """Write `tool` back to `data/voice_bot_tools/<COMPANY>/save_call_result.json`,
+def _save_tool(
+    company_key: str, tool: dict, sector: str = DEFAULT_SECTOR,
+) -> None:
+    """Write `tool` back to ``data/voice_bot_tools/<COMPANY>/<sector>/save_call_result.json``,
     creating parent dirs as needed. Pretty-printed UTF-8, no ASCII escapes."""
-    p = _tool_file(company_key)
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    p = _tool_file(company_key, sector)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
         json.dumps(tool, ensure_ascii=False, indent=2),
@@ -116,10 +153,14 @@ def _props_by_id(tool: dict) -> dict[str, dict]:
 class VoiceBotResultsPanel(ttk.Frame):
     """Hierarchical viewer + per-node editor for save_call_result tool."""
 
-    def __init__(self, master: tk.Misc, company: Company) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
         self._company = company
-        self._tool: Optional[dict] = _load_tool(company.key)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
+        self._tool: Optional[dict] = _load_tool(company.key, self._sector)
         self._props: dict[str, dict] = _props_by_id(self._tool) if self._tool else {}
         # iid → payload dict ({"kind": ..., "title": ..., "ref": ..., ...})
         self._iid_payload: dict[str, dict] = {}
@@ -148,7 +189,7 @@ class VoiceBotResultsPanel(ttk.Frame):
             ttk.Label(
                 self,
                 text=t("voice_bot_results_no_file").format(
-                    path=str(_tool_file(company.key)),
+                    path=str(_tool_file(company.key, self._sector)),
                 ),
                 foreground=TBD_FG,
                 wraplength=900,
@@ -157,8 +198,10 @@ class VoiceBotResultsPanel(ttk.Frame):
             return
 
         # ---- Top toolbar (panel-wide actions) ----
-        tool_id = (VOICE_BOT_TOOL_IDS.get(company.key) or {}).get(
-            "save_call_result", ""
+        tool_id = (
+            ((VOICE_BOT_TOOL_IDS.get(company.key) or {})
+             .get(self._sector) or {})
+            .get("save_call_result", "")
         )
         self._tool_id = tool_id
         toolbar = ttk.Frame(self)
@@ -852,7 +895,7 @@ class VoiceBotResultsPanel(ttk.Frame):
             )
             return
         try:
-            _save_tool(self._company.key, self._tool)
+            _save_tool(self._company.key, self._tool, self._sector)
         except OSError as exc:
             messagebox.showerror(
                 t("voice_bot_results_save_edits"), str(exc),
@@ -895,12 +938,12 @@ class VoiceBotResultsPanel(ttk.Frame):
                 parent=self.winfo_toplevel(),
             )
             return
-        latest = _load_tool(self._company.key)
+        latest = _load_tool(self._company.key, self._sector)
         if latest is None:
             messagebox.showerror(
                 t("voice_bot_results_push"),
                 t("voice_bot_results_no_file").format(
-                    path=str(_tool_file(self._company.key)),
+                    path=str(_tool_file(self._company.key, self._sector)),
                 ),
                 parent=self.winfo_toplevel(),
             )
@@ -910,7 +953,7 @@ class VoiceBotResultsPanel(ttk.Frame):
             t("voice_bot_results_push_confirm").format(
                 tool_id=self._tool_id,
                 name=latest.get("name") or "—",
-                file=str(_tool_file(self._company.key)),
+                file=str(_tool_file(self._company.key, self._sector)),
             ),
             parent=self.winfo_toplevel(),
         ):
@@ -1004,7 +1047,7 @@ class VoiceBotResultsPanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _copy_json(self) -> None:
-        path = _tool_file(self._company.key)
+        path = _tool_file(self._company.key, self._sector)
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:

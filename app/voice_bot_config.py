@@ -15,6 +15,7 @@ import json
 from typing import Optional
 
 from .paths import data_dir
+from .sectors import DEFAULT_SECTOR, SECTORS
 
 
 # SIP-headers, проброшенные из Webitel bridge-ноды (см. voice schema 136).
@@ -626,50 +627,74 @@ CO_VOICE_FIRST_MESSAGE = (
 )
 
 
-# ElevenLabs tool ids per company, keyed by tool short-name (matches the
-# file under `data/voice_bot_tools/<COMPANY>/<name>.json`). Used by the
+# ElevenLabs tool ids per (company, sector, tool name). Used by the
 # CRM-results panel to PATCH the tool when the operator clicks
-# «Обновить tool в ElevenLabs». Add new entries here as new tools / new
-# companies appear.
-VOICE_BOT_TOOL_IDS: dict[str, dict[str, str]] = {
+# «Обновить tool в ElevenLabs».
+#
+# Structure: VOICE_BOT_TOOL_IDS[<COMPANY>][<sector>][<tool>] = tool_id.
+# Today all production save_call_result tools belong to the Collection
+# sector; CC remains empty until a CC voice bot is set up.
+VOICE_BOT_TOOL_IDS: dict[str, dict[str, dict[str, str]]] = {
     "CO_": {
-        "save_call_result": "tool_6401krh3cx1sfwbtwq455cmmbpj8",
+        "collection": {
+            "save_call_result": "tool_6401krh3cx1sfwbtwq455cmmbpj8",
+        },
+        "cc": {},
     },
     "PE_": {
-        "save_call_result": "tool_5401ks5st5j9fp1be4rqkswt6eg6",
+        "collection": {
+            "save_call_result": "tool_5401ks5st5j9fp1be4rqkswt6eg6",
+        },
+        "cc": {},
     },
 }
 
 
-SEEDS: dict[str, dict] = {
+# Per-company per-sector defaults. Mirrors VOICE_BOT_TOOL_IDS shape:
+# SEEDS[<COMPANY>][<sector>] = {agent_provider, webitel_schema_id, ...}.
+SEEDS: dict[str, dict[str, dict]] = {
     "CO_": {
-        "agent_provider": "elevenlabs",
-        "elevenlabs_agent_id": "",  # заполняется оператором из UI после Pull
-        "webitel_schema_id": 136,
-        "webitel_schema_name": "Collection_11labs_agent",
-        "webitel_gateway_id": 117,
-        "webitel_gateway_name": "test11labsNEW",
-        "main_prompt": CO_VOICE_MAIN_PROMPT,
-        "first_message": CO_VOICE_FIRST_MESSAGE,
-        "dynamic_variables": list(CO_SIP_DYNAMIC_VARS),
+        "collection": {
+            "agent_provider": "elevenlabs",
+            "elevenlabs_agent_id": "",
+            "webitel_schema_id": 136,
+            "webitel_schema_name": "Collection_11labs_agent",
+            "webitel_gateway_id": 117,
+            "webitel_gateway_name": "test11labsNEW",
+            "main_prompt": CO_VOICE_MAIN_PROMPT,
+            "first_message": CO_VOICE_FIRST_MESSAGE,
+            "dynamic_variables": list(CO_SIP_DYNAMIC_VARS),
+        },
+        "cc": {},
     },
     "PE_": {
-        "agent_provider": "elevenlabs",
-        "elevenlabs_agent_id": "",  # PE1_collection_voice_bot_prod — оператор выбирает через UI
-        "webitel_schema_id": 82,
-        "webitel_schema_name": "Collection_11labs_agent",
-        "webitel_gateway_id": 3,
-        "webitel_gateway_name": "11labs_collection_voice_bot",
-        "main_prompt": "",
-        "first_message": "",
-        "dynamic_variables": list(PE_SIP_DYNAMIC_VARS),
+        "collection": {
+            "agent_provider": "elevenlabs",
+            "elevenlabs_agent_id": "",
+            "webitel_schema_id": 82,
+            "webitel_schema_name": "Collection_11labs_agent",
+            "webitel_gateway_id": 3,
+            "webitel_gateway_name": "11labs_collection_voice_bot",
+            "main_prompt": "",
+            "first_message": "",
+            "dynamic_variables": list(PE_SIP_DYNAMIC_VARS),
+        },
+        "cc": {},
     },
 }
 
 
 # ---------- persistence ----------
 
-def config_path(company_key: str):
+def config_path(company_key: str, sector: str = DEFAULT_SECTOR):
+    return (
+        data_dir() / "voice_bot_config" / company_key / f"{sector}.json"
+    )
+
+
+def _legacy_config_path(company_key: str):
+    """Pre-sector path: ``data/voice_bot_config/<KEY>.json``. Read once
+    during migration if it still exists in a user's dist/data/."""
     return data_dir() / "voice_bot_config" / f"{company_key}.json"
 
 
@@ -687,8 +712,30 @@ def _empty_config() -> dict:
     }
 
 
-def load_config(company_key: str) -> dict:
-    p = config_path(company_key)
+def _migrate_legacy_voice_bot_config(company_key: str) -> None:
+    """Move ``data/voice_bot_config/<KEY>.json`` →
+    ``data/voice_bot_config/<KEY>/collection.json`` once. Called lazily
+    by ``load_config``; no-op if already migrated or no legacy file."""
+    legacy = _legacy_config_path(company_key)
+    if not legacy.exists() or legacy.is_dir():
+        return
+    target = config_path(company_key, DEFAULT_SECTOR)
+    if target.exists():
+        # Already migrated; leave legacy untouched (user may have an
+        # outdated copy; don't overwrite the new one).
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(target)
+    except OSError:
+        pass
+
+
+def load_config(company_key: str, sector: str = DEFAULT_SECTOR) -> dict:
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    _migrate_legacy_voice_bot_config(company_key)
+    p = config_path(company_key, sector)
     if p.exists():
         try:
             cfg = json.loads(p.read_text(encoding="utf-8"))
@@ -698,14 +745,18 @@ def load_config(company_key: str) -> dict:
                 return base
         except (OSError, json.JSONDecodeError):
             pass
-    seed = SEEDS.get(company_key)
+    seed = (SEEDS.get(company_key) or {}).get(sector) or {}
     if seed:
         return json.loads(json.dumps(seed))  # deep copy
     return _empty_config()
 
 
-def save_config(company_key: str, cfg: dict) -> None:
-    p = config_path(company_key)
+def save_config(
+    company_key: str, cfg: dict, sector: str = DEFAULT_SECTOR,
+) -> None:
+    if sector not in SECTORS:
+        sector = DEFAULT_SECTOR
+    p = config_path(company_key, sector)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(
@@ -716,10 +767,14 @@ def save_config(company_key: str, cfg: dict) -> None:
         pass
 
 
-def get_main_prompt(company_key: str) -> str:
-    return str(load_config(company_key).get("main_prompt") or "")
+def get_main_prompt(
+    company_key: str, sector: str = DEFAULT_SECTOR,
+) -> str:
+    return str(load_config(company_key, sector).get("main_prompt") or "")
 
 
-def get_first_message(company_key: str) -> Optional[str]:
-    v = load_config(company_key).get("first_message")
+def get_first_message(
+    company_key: str, sector: str = DEFAULT_SECTOR,
+) -> Optional[str]:
+    v = load_config(company_key, sector).get("first_message")
     return str(v) if v else None

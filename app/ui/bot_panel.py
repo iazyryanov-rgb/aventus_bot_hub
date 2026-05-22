@@ -3,13 +3,18 @@ from tkinter import ttk
 
 from ..data import Company
 from ..i18n import t
+from ..sectors import DEFAULT_SECTOR, SECTORS
 from .alerts_panel import AlertsPanel
 from .modern_notebook import ModernNotebook
 
 
 class BotPanel(ttk.Frame):
-    def __init__(self, master: tk.Misc, company: Company, kind: str) -> None:
+    def __init__(
+        self, master: tk.Misc, company: Company, kind: str,
+        sector: str = DEFAULT_SECTOR,
+    ) -> None:
         super().__init__(master)
+        self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
         self.notebook = ModernNotebook(self)
         self.notebook.pack(fill="both", expand=True, padx=10, pady=(10, 10))
 
@@ -31,23 +36,23 @@ class BotPanel(ttk.Frame):
             from .voice_bot_results_panel import VoiceBotResultsPanel
             from .voice_bot_conversations_panel import VoiceBotConversationsPanel
             self.notebook.add(
-                VoiceBotOverviewPanel(self.notebook, company),
+                VoiceBotOverviewPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_overview"),
             )
             self.notebook.add(
-                VoiceBotMappingPanel(self.notebook, company),
+                VoiceBotMappingPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_mapping"),
             )
             self.notebook.add(
-                VoiceBotPromptsPanel(self.notebook, company),
+                VoiceBotPromptsPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_prompts"),
             )
             self.notebook.add(
-                VoiceBotResultsPanel(self.notebook, company),
+                VoiceBotResultsPanel(self.notebook, company, self._sector),
                 text=t("voice_bot_tab_results"),
             )
             self.notebook.add(
-                VoiceBotConversationsPanel(self.notebook, company),
+                VoiceBotConversationsPanel(self.notebook, company, self._sector),
                 text=t("voice_bot_tab_conversations"),
             )
 
@@ -63,27 +68,27 @@ class BotPanel(ttk.Frame):
             from .chat_audit_panel import ChatAuditPanel
             from .calibration_panel import CalibrationPanel
             self.notebook.add(
-                WaBotOverviewPanel(self.notebook, company),
+                WaBotOverviewPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_overview"),
             )
             self.notebook.add(
-                WaBotMappingPanel(self.notebook, company),
+                WaBotMappingPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_mapping"),
             )
             self.notebook.add(
-                WaBotSendersPanel(self.notebook, company),
+                WaBotSendersPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_senders"),
             )
             self.notebook.add(
-                WaBotFunctionsPanel(self.notebook, company),
+                WaBotFunctionsPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_functions"),
             )
             self.notebook.add(
-                WaBotPromptsPanel(self.notebook, company),
+                WaBotPromptsPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_prompts"),
             )
             self.notebook.add(
-                WaBotBuilderPanel(self.notebook, company),
+                WaBotBuilderPanel(self.notebook, company, self._sector),
                 text=t("wa_bot_tab_builder"),
             )
             self.notebook.add(

@@ -261,8 +261,49 @@ class CompaniesTree(ttk.Frame):
             bg=BG,
         ).pack(side="left")
 
-        self._list = tk.Frame(self, bg=BG)
-        self._list.pack(fill="both", expand=True, padx=6, pady=(0, 12))
+        # Scrollable container: Canvas hosts the inner _list Frame, vertical
+        # scrollbar drives Canvas.yview. Mouse-wheel events are bound only
+        # while the cursor is over the canvas, so the wheel still works
+        # normally in panels on the right.
+        wrap = tk.Frame(self, bg=BG)
+        wrap.pack(fill="both", expand=True, padx=6, pady=(0, 12))
+        self._list_canvas = tk.Canvas(
+            wrap, bg=BG, highlightthickness=0, borderwidth=0,
+        )
+        scrollbar = ttk.Scrollbar(
+            wrap, orient="vertical", command=self._list_canvas.yview,
+        )
+        self._list_canvas.configure(yscrollcommand=scrollbar.set)
+        self._list_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self._list = tk.Frame(self._list_canvas, bg=BG)
+        self._list_window = self._list_canvas.create_window(
+            (0, 0), window=self._list, anchor="nw",
+        )
+        self._list.bind(
+            "<Configure>",
+            lambda _e: self._list_canvas.configure(
+                scrollregion=self._list_canvas.bbox("all"),
+            ),
+        )
+        self._list_canvas.bind(
+            "<Configure>",
+            lambda e: self._list_canvas.itemconfig(
+                self._list_window, width=e.width,
+            ),
+        )
+
+        def _on_mousewheel(event: tk.Event) -> None:
+            self._list_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_wheel(_e: tk.Event) -> None:
+            self._list_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_wheel(_e: tk.Event) -> None:
+            self._list_canvas.unbind_all("<MouseWheel>")
+
+        self._list_canvas.bind("<Enter>", _bind_wheel)
+        self._list_canvas.bind("<Leave>", _unbind_wheel)
 
         self._companies = load_companies()
         self._co_rows: dict[str, Row] = {}

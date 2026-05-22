@@ -127,8 +127,8 @@ class VoiceBotOverviewPanel(ttk.Frame):
             ("duration_total", t("voice_bot_overview_card_duration_total"), 1, 0),
             ("duration_avg", t("voice_bot_overview_card_duration_avg"), 1, 1),
             ("duration_max", t("voice_bot_overview_card_duration_max"), 1, 2),
-            ("cost_total", t("voice_bot_overview_card_cost_total"), 2, 0),
-            ("cost_avg", t("voice_bot_overview_card_cost_avg"), 2, 1),
+            ("llm_usd_total", t("voice_bot_overview_card_llm_usd_total"), 2, 0),
+            ("llm_usd_avg", t("voice_bot_overview_card_llm_usd_avg"), 2, 1),
             ("success_rate", t("voice_bot_overview_card_success_rate"), 2, 2),
         ]
         for col in range(3):
@@ -221,19 +221,28 @@ class VoiceBotOverviewPanel(ttk.Frame):
                 ),
             )
 
-            def fetch_cost(conv: dict) -> int:
+            def fetch_cost(conv: dict) -> tuple[int, float]:
+                """Return ``(credits, llm_usd)`` for one conversation.
+                Credits = total ElevenLabs charge (LLM + runtime in credits).
+                USD     = exact Anthropic LLM price reported by ElevenLabs
+                          (TTS / ASR / call-infra USD price is NOT exposed
+                          per-conversation by the API for enterprise tier)."""
                 try:
                     det = get_conversation(
                         conv["conversation_id"], api_key=api_key,
                     )
-                    return int(((det.get("metadata") or {}).get("cost") or 0))
+                    md = det.get("metadata") or {}
+                    credits = int(md.get("cost") or 0)
+                    charging = md.get("charging") or {}
+                    llm_usd = float(charging.get("llm_price") or 0.0)
+                    return (credits, llm_usd)
                 except Exception:  # noqa: BLE001
-                    return 0
+                    return (0, 0.0)
 
             with ThreadPoolExecutor(max_workers=8) as ex:
-                costs = []
-                for i, cost in enumerate(ex.map(fetch_cost, in_period)):
-                    costs.append(cost)
+                pairs: list[tuple[int, float]] = []
+                for i, pair in enumerate(ex.map(fetch_cost, in_period)):
+                    pairs.append(pair)
                     if self.winfo_exists() and (i + 1) % 5 == 0:
                         done = i + 1
                         self.after(
@@ -246,8 +255,11 @@ class VoiceBotOverviewPanel(ttk.Frame):
                                     foreground=META_FG,
                                 ),
                         )
-                cost_total = sum(costs)
-            stats = _aggregate_conversations(in_period, cost_total)
+                cost_total = sum(p[0] for p in pairs)
+                llm_usd_total = sum(p[1] for p in pairs)
+            stats = _aggregate_conversations(
+                in_period, cost_total, llm_usd_total,
+            )
             err: Optional[str] = None
         except Exception as exc:  # noqa: BLE001
             stats, err = None, str(exc)
@@ -289,12 +301,12 @@ class VoiceBotOverviewPanel(ttk.Frame):
         self._cards["duration_max"].configure(
             text=_fmt_hms(stats["duration_max"]),
         )
-        self._cards["cost_total"].configure(
-            text=f"{stats['cost_total']} cr",
+        self._cards["llm_usd_total"].configure(
+            text=f"${stats['llm_usd_total']:.2f}",
         )
-        self._cards["cost_avg"].configure(
+        self._cards["llm_usd_avg"].configure(
             text=(
-                f"{stats['cost_avg']:.1f} cr" if total else "—"
+                f"${stats['llm_usd_avg']:.4f}" if total else "—"
             ),
         )
         self._cards["success_rate"].configure(text=rate)
@@ -306,7 +318,9 @@ class VoiceBotOverviewPanel(ttk.Frame):
         )
 
 
-def _aggregate_conversations(convs: list[dict], cost_total: int) -> dict:
+def _aggregate_conversations(
+    convs: list[dict], cost_total: int, llm_usd_total: float,
+) -> dict:
     total = len(convs)
     successful = sum(1 for c in convs if c.get("call_successful") == "success")
     failed = sum(1 for c in convs if c.get("call_successful") == "failure")
@@ -314,7 +328,7 @@ def _aggregate_conversations(convs: list[dict], cost_total: int) -> dict:
     dur_total = sum(durations)
     dur_avg = (dur_total / total) if total else 0
     dur_max = max(durations) if durations else 0
-    cost_avg = (cost_total / total) if total else 0.0
+    llm_usd_avg = (llm_usd_total / total) if total else 0.0
     return {
         "total": total,
         "successful": successful,
@@ -322,8 +336,9 @@ def _aggregate_conversations(convs: list[dict], cost_total: int) -> dict:
         "duration_total": dur_total,
         "duration_avg": int(dur_avg),
         "duration_max": dur_max,
-        "cost_total": cost_total,
-        "cost_avg": cost_avg,
+        "cost_total_credits": cost_total,
+        "llm_usd_total": llm_usd_total,
+        "llm_usd_avg": llm_usd_avg,
     }
 
 

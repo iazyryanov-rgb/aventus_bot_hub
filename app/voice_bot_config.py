@@ -19,9 +19,23 @@ from .paths import data_dir
 
 # SIP-headers, проброшенные из Webitel bridge-ноды (см. voice schema 136).
 # Имя без префикса `sip_h_X-` — то, как ElevenLabs увидит переменную после
-# нормализации (lower_snake_case). Хаб использует список, чтобы показать
-# оператору, какие плейсхолдеры можно вставлять в промпт.
+# нормализации (lower_snake_case). Имена различаются per-company (под каждый
+# voice-bot свой набор SIP-headers в bridge-ноде Webitel) — поэтому
+# актуальный набор живёт в SEEDS[<key>]["dynamic_variables"]. Константа
+# ниже — generic fallback, который используется когда per-company запись
+# в SEEDS отсутствует. Vars-секция в Prompts-панели читает из
+# `self._cfg["dynamic_variables"]`, не из этой константы напрямую.
 SIP_DYNAMIC_VARS: tuple[str, ...] = (
+    "sip_uuid",
+    "sip_caller_id",
+    "sip_loan_id",
+    "sip_loan_debt",
+    "sip_dpd",
+)
+
+
+# ---- CO_ Credito365 — SIP headers from voice schema 136 ----
+CO_SIP_DYNAMIC_VARS: tuple[str, ...] = (
     "sip_member_name",
     "sip_user_first_name",
     "sip_loan_debt",
@@ -32,6 +46,28 @@ SIP_DYNAMIC_VARS: tuple[str, ...] = (
     "sip_uuid",
     # Опционально, если допрокинем header перед прод-релизом:
     "sip_agreement_signed",
+)
+
+
+# ---- PE_ Prestamo365 — SIP headers from voice schema 82 (verified 2026-05-22) ----
+PE_SIP_DYNAMIC_VARS: tuple[str, ...] = (
+    "sip_uuid",
+    "sip_caller_id",
+    "sip_loan_id",
+    "sip_loan_type",
+    "sip_loan_debt",
+    "sip_dpd",
+    "sip_extension_payment",
+    "sip_date_of_last_ptp",
+    "sip_last_ptp_amount",
+    "sip_discount_payment",
+    "sip_discount_type",
+    "sip_discount_valid_to",
+    "sip_user_name",
+    "sip_cip",
+    "sip_cip_created_at",
+    "sip_cip_amount",
+    "sip_cip_client_id",
 )
 
 
@@ -615,7 +651,7 @@ SEEDS: dict[str, dict] = {
         "webitel_gateway_name": "test11labsNEW",
         "main_prompt": CO_VOICE_MAIN_PROMPT,
         "first_message": CO_VOICE_FIRST_MESSAGE,
-        "dynamic_variables": list(SIP_DYNAMIC_VARS),
+        "dynamic_variables": list(CO_SIP_DYNAMIC_VARS),
     },
     "PE_": {
         "agent_provider": "elevenlabs",
@@ -626,7 +662,7 @@ SEEDS: dict[str, dict] = {
         "webitel_gateway_name": "11labs_collection_voice_bot",
         "main_prompt": "",
         "first_message": "",
-        "dynamic_variables": list(SIP_DYNAMIC_VARS),
+        "dynamic_variables": list(PE_SIP_DYNAMIC_VARS),
     },
 }
 

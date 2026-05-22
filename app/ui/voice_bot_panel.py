@@ -255,22 +255,6 @@ class VoiceBotMappingPanel(ttk.Frame):
             if n.get("label") not in ("bridge", "httpRequest", "set")
         ]
 
-        any_disabled_gw = False
-        for br in bridges:
-            for ep in _extract_bridge_endpoints(br):
-                gw = ep.get("gateway") or {}
-                if not gw.get("enable"):
-                    any_disabled_gw = True
-                    break
-            if any_disabled_gw:
-                break
-        if any_disabled_gw:
-            ttk.Label(
-                self._body,
-                text=t("voice_bot_mapping_gateway_disabled_warn"),
-                foreground=ERR_FG, wraplength=900, justify="left",
-            ).pack(anchor="w", pady=(0, 8))
-
         for n in bridges:
             self._render_bridge(n)
         for n in https:
@@ -313,22 +297,13 @@ class VoiceBotMappingPanel(ttk.Frame):
             gw = ep.get("gateway") or {}
             gw_name = gw.get("name") or "—"
             gw_id = gw.get("id") or "—"
-            enabled = bool(gw.get("enable"))
             dial = ep.get("dialString") or "—"
-            color = OK_FG if enabled else ERR_FG
-            badge = (
-                t("voice_bot_mapping_gateway_enabled")
-                if enabled else t("voice_bot_mapping_gateway_disabled")
-            )
             ttk.Label(
                 box,
                 text=t("voice_bot_mapping_endpoint_header").format(
                     n=i + 1, gw=gw_name, gw_id=gw_id, dial=dial,
                 ),
                 foreground=TEXT_FG, font=("Segoe UI", 9, "bold"),
-            ).pack(anchor="w", pady=(0, 2))
-            ttk.Label(
-                box, text=badge, foreground=color,
             ).pack(anchor="w", pady=(0, 4))
             params = [p for p in (ep.get("parameters") or []) if isinstance(p, dict)]
             sip_params = [p for p in params if (p.get("key") or "").lower().startswith("sip_h_x-")]
@@ -530,14 +505,15 @@ class VoiceBotPromptsPanel(ttk.Frame):
         self._first_message.pack(fill="x", padx=12, pady=(0, 8))
         self._first_message.insert("1.0", str(self._cfg.get("first_message") or ""))
 
-        # ---- SIP dynamic_variables (только список placeholder'ов) ----
+        # ---- SIP dynamic_variables (только список placeholder'ов, per-company) ----
         vars_box = ttk.LabelFrame(
             self, text=t("voice_bot_section_dynamic_vars"), padding=8,
         )
         vars_box.pack(fill="x", padx=12, pady=(0, 12))
+        dyn_vars = list(self._cfg.get("dynamic_variables") or SIP_DYNAMIC_VARS)
         ttk.Label(
             vars_box,
-            text="  ".join(f"{{{{ {v} }}}}" for v in SIP_DYNAMIC_VARS),
+            text="  ".join(f"{{{{ {v} }}}}" for v in dyn_vars),
             foreground=TEXT_FG, font=("Consolas", 9),
             wraplength=900, justify="left",
         ).pack(anchor="w")

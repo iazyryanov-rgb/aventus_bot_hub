@@ -617,6 +617,17 @@ SEEDS: dict[str, dict] = {
         "first_message": CO_VOICE_FIRST_MESSAGE,
         "dynamic_variables": list(SIP_DYNAMIC_VARS),
     },
+    "PE_": {
+        "agent_provider": "elevenlabs",
+        "elevenlabs_agent_id": "",  # PE1_collection_voice_bot_prod — оператор выбирает через UI
+        "webitel_schema_id": 82,
+        "webitel_schema_name": "Collection_11labs_agent",
+        "webitel_gateway_id": 3,
+        "webitel_gateway_name": "11labs_collection_voice_bot",
+        "main_prompt": "",
+        "first_message": "",
+        "dynamic_variables": list(SIP_DYNAMIC_VARS),
+    },
 }
 
 

@@ -74,13 +74,50 @@ class VoiceBotOverviewPanel(ttk.Frame):
         ).pack(anchor="w", padx=14, pady=(8, 12))
 
 
+def _normalize_sip_header_to_dyn_var(name: str) -> str:
+    """Convert a Webitel SIP-header (``sip_h_X-<a>-<b>-<c>``) to the
+    ElevenLabs dynamic-variable form (``sip_<a>_<b>_<c>``). Mirrors how
+    ElevenLabs auto-normalizes incoming custom SIP headers."""
+    n = name or ""
+    if n.lower().startswith("sip_h_x-"):
+        n = n[len("sip_h_X-"):]
+    return "sip_" + n.lower().replace("-", "_")
+
+
+def _extract_bridge_endpoints(node: dict) -> list[dict]:
+    sch = node.get("schema") or {}
+    eps = sch.get("endpoints") or []
+    return [e for e in eps if isinstance(e, dict)]
+
+
+def _extract_httprequest_exports(node: dict) -> list[dict]:
+    sch = node.get("schema") or {}
+    out = sch.get("exportVariables") or sch.get("exports") or []
+    return [v for v in out if isinstance(v, dict)]
+
+
+def _extract_set_vars(node: dict) -> list[dict]:
+    sch = node.get("schema") or {}
+    out = sch.get("set") or []
+    return [v for v in out if isinstance(v, dict)]
+
+
 class VoiceBotMappingPanel(ttk.Frame):
-    """Empty placeholder — маппинг (SIP-headers → dynamic_variables,
-    Webitel schema id, gateway). Контент будет позже."""
+    """Viewer of the Webitel voice routing schema for this company.
+
+    Pulls the schema from Webitel (``GET /routing/schema/<id>``) using
+    the company's host + token, then renders the structurally important
+    bits: bridge endpoints (gateway, dialString, SIP headers →
+    normalized ElevenLabs dynamic_variables), httpRequest nodes (CRM
+    lookup URL + exported variables), and ``set`` test-data nodes.
+    Read-only; edits to the schema happen in Webitel UI.
+    """
 
     def __init__(self, master: tk.Misc, company: Company) -> None:
         super().__init__(master)
         self._company = company
+        self._cfg: dict = load_config(company.key)
+        self._schema: Optional[dict] = None
 
         ttk.Label(
             self,
@@ -94,13 +131,308 @@ class VoiceBotMappingPanel(ttk.Frame):
             text=f"{code} — {company.name} ({company.country})",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        schema_id = self._cfg.get("webitel_schema_id") or 0
+        schema_name = self._cfg.get("webitel_schema_name") or ""
+        gateway_id = self._cfg.get("webitel_gateway_id") or ""
+        gateway_name = self._cfg.get("webitel_gateway_name") or ""
+
+        meta = ttk.LabelFrame(
+            self, text=t("voice_bot_mapping_section_schema"), padding=10,
+        )
+        meta.pack(fill="x", padx=12, pady=(0, 8))
         ttk.Label(
-            self,
-            text=t("voice_bot_mapping_placeholder"),
-            foreground=META_FG,
-            wraplength=900,
-            justify="left",
-        ).pack(anchor="w", padx=14, pady=(8, 12))
+            meta, foreground=META_FG,
+            text=t("voice_bot_mapping_schema_label") + ":",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(
+            meta, text=f"{schema_name or '—'}  (id={schema_id or '—'})",
+            foreground=TEXT_FG,
+        ).grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(
+            meta, foreground=META_FG,
+            text=t("voice_bot_mapping_gateway_label") + ":",
+        ).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(
+            meta, text=f"{gateway_name or '—'}  (id={gateway_id or '—'})",
+            foreground=TEXT_FG,
+        ).grid(row=1, column=1, sticky="w", pady=2)
+        if schema_id:
+            ttk.Button(
+                meta, text=t("voice_bot_mapping_open_in_webitel"),
+                command=self._open_in_webitel,
+            ).grid(row=0, column=2, rowspan=2, padx=(20, 0), sticky="w")
+        self._pull_btn = ttk.Button(
+            meta, text=t("voice_bot_mapping_pull"),
+            command=self._pull, style="Accent.TButton",
+        )
+        self._pull_btn.grid(row=0, column=3, rowspan=2, padx=(6, 0), sticky="w")
+        self._status = ttk.Label(meta, text="", foreground=META_FG)
+        self._status.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        if not schema_id:
+            ttk.Label(
+                self, text=t("voice_bot_mapping_no_schema_id"),
+                foreground=TBD_FG, wraplength=900, justify="left",
+            ).pack(anchor="w", padx=14, pady=12)
+            return
+
+        # ---- Scrollable body for rendered sections ----
+        body_wrap = ttk.Frame(self)
+        body_wrap.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        canvas = tk.Canvas(body_wrap, highlightthickness=0)
+        vscroll = ttk.Scrollbar(
+            body_wrap, orient="vertical", command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=vscroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vscroll.pack(side="right", fill="y")
+        self._body = ttk.Frame(canvas)
+        self._body_window = canvas.create_window(
+            (0, 0), window=self._body, anchor="nw",
+        )
+        self._body.bind(
+            "<Configure>",
+            lambda _e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(self._body_window, width=e.width),
+        )
+
+        self.after(50, self._pull)
+
+    # ------------------------------------------------------------------
+    # Webitel pull
+    # ------------------------------------------------------------------
+
+    def _open_in_webitel(self) -> None:
+        import webbrowser
+        host = (self._company.webitel_host or "").rstrip("/")
+        sid = self._cfg.get("webitel_schema_id") or 0
+        if not host or not sid:
+            return
+        webbrowser.open(f"{host}/flow/{sid}/voice")
+
+    def _pull(self) -> None:
+        self._pull_btn.configure(state="disabled")
+        self._status.configure(
+            text=t("voice_bot_mapping_loading"), foreground=META_FG,
+        )
+        threading.Thread(target=self._pull_worker, daemon=True).start()
+
+    def _pull_worker(self) -> None:
+        try:
+            from ..webitel import WebitelClient
+            sid = int(self._cfg.get("webitel_schema_id") or 0)
+            client = WebitelClient(
+                self._company.webitel_host,
+                self._company.webitel_access_token,
+            )
+            schema = client.get_schema(sid)
+            err: Optional[str] = None
+        except Exception as exc:  # noqa: BLE001 — webitel client can raise many things
+            schema, err = None, str(exc)
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._render(schema, err))
+
+    def _render(self, schema: Optional[dict], err: Optional[str]) -> None:
+        self._pull_btn.configure(state="normal")
+        if err:
+            self._status.configure(text=err, foreground=ERR_FG)
+            return
+        self._schema = schema or {}
+        for child in self._body.winfo_children():
+            child.destroy()
+        nodes = (self._schema.get("payload") or {}).get("nodes") or []
+        nodes = [n for n in nodes if isinstance(n, dict)]
+        bridges = [n for n in nodes if n.get("label") == "bridge"]
+        https = [n for n in nodes if n.get("label") == "httpRequest"]
+        sets = [n for n in nodes if n.get("label") == "set"]
+        others = [
+            n for n in nodes
+            if n.get("label") not in ("bridge", "httpRequest", "set")
+        ]
+
+        any_disabled_gw = False
+        for br in bridges:
+            for ep in _extract_bridge_endpoints(br):
+                gw = ep.get("gateway") or {}
+                if not gw.get("enable"):
+                    any_disabled_gw = True
+                    break
+            if any_disabled_gw:
+                break
+        if any_disabled_gw:
+            ttk.Label(
+                self._body,
+                text=t("voice_bot_mapping_gateway_disabled_warn"),
+                foreground=ERR_FG, wraplength=900, justify="left",
+            ).pack(anchor="w", pady=(0, 8))
+
+        for n in bridges:
+            self._render_bridge(n)
+        for n in https:
+            self._render_httprequest(n)
+        for n in sets:
+            self._render_set(n)
+        if others:
+            others_box = ttk.LabelFrame(
+                self._body,
+                text=t("voice_bot_mapping_section_other_nodes"),
+                padding=8,
+            )
+            others_box.pack(fill="x", pady=(0, 8))
+            for n in others:
+                ttk.Label(
+                    others_box,
+                    text=f"• {n.get('label','?')}  id={n.get('id','')}",
+                    foreground=TEXT_FG,
+                ).pack(anchor="w")
+
+        self._status.configure(
+            text=t("voice_bot_mapping_loaded").format(
+                bridges=len(bridges), https=len(https),
+                sets=len(sets), others=len(others),
+            ),
+            foreground=OK_FG,
+        )
+
+    # ------------------------------------------------------------------
+    # Section renderers
+    # ------------------------------------------------------------------
+
+    def _render_bridge(self, node: dict) -> None:
+        nid = node.get("id", "")
+        eps = _extract_bridge_endpoints(node)
+        title = t("voice_bot_mapping_bridge_title").format(id=nid)
+        box = ttk.LabelFrame(self._body, text=title, padding=8)
+        box.pack(fill="x", pady=(0, 8))
+        for i, ep in enumerate(eps):
+            gw = ep.get("gateway") or {}
+            gw_name = gw.get("name") or "—"
+            gw_id = gw.get("id") or "—"
+            enabled = bool(gw.get("enable"))
+            dial = ep.get("dialString") or "—"
+            color = OK_FG if enabled else ERR_FG
+            badge = (
+                t("voice_bot_mapping_gateway_enabled")
+                if enabled else t("voice_bot_mapping_gateway_disabled")
+            )
+            ttk.Label(
+                box,
+                text=t("voice_bot_mapping_endpoint_header").format(
+                    n=i + 1, gw=gw_name, gw_id=gw_id, dial=dial,
+                ),
+                foreground=TEXT_FG, font=("Segoe UI", 9, "bold"),
+            ).pack(anchor="w", pady=(0, 2))
+            ttk.Label(
+                box, text=badge, foreground=color,
+            ).pack(anchor="w", pady=(0, 4))
+            params = [p for p in (ep.get("parameters") or []) if isinstance(p, dict)]
+            sip_params = [p for p in params if (p.get("key") or "").lower().startswith("sip_h_x-")]
+            if not sip_params:
+                ttk.Label(
+                    box, text=t("voice_bot_mapping_no_sip_headers"),
+                    foreground=TBD_FG,
+                ).pack(anchor="w", pady=(0, 2))
+                continue
+            tv = ttk.Treeview(
+                box,
+                columns=("sip", "norm", "src"),
+                show="headings",
+                height=min(15, max(3, len(sip_params))),
+            )
+            tv.heading("sip", text=t("voice_bot_mapping_col_sip"))
+            tv.heading("norm", text=t("voice_bot_mapping_col_normalized"))
+            tv.heading("src", text=t("voice_bot_mapping_col_source"))
+            tv.column("sip", width=240, anchor="w")
+            tv.column("norm", width=220, anchor="w")
+            tv.column("src", width=320, anchor="w")
+            for p in sip_params:
+                k = p.get("key") or ""
+                v = p.get("value")
+                if v is None:
+                    v = ""
+                tv.insert(
+                    "", "end",
+                    values=(k, _normalize_sip_header_to_dyn_var(k), str(v)),
+                )
+            tv.pack(fill="x", pady=(0, 6))
+
+    def _render_httprequest(self, node: dict) -> None:
+        nid = node.get("id", "")
+        sch = node.get("schema") or {}
+        url = sch.get("url") or sch.get("requestUrl") or "—"
+        method = sch.get("method") or sch.get("requestMethod") or "POST"
+        body_data = sch.get("data") or ""
+        exports = _extract_httprequest_exports(node)
+        title = t("voice_bot_mapping_httprequest_title").format(id=nid)
+        box = ttk.LabelFrame(self._body, text=title, padding=8)
+        box.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            box, text=f"{method}  {url}",
+            foreground=TEXT_FG, font=("Consolas", 9),
+            wraplength=900, justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+        if body_data and body_data != "{}":
+            ttk.Label(
+                box, text=f"body: {body_data}",
+                foreground=META_FG, font=("Consolas", 9),
+                wraplength=900, justify="left",
+            ).pack(anchor="w", pady=(0, 4))
+        if not exports:
+            ttk.Label(
+                box, text=t("voice_bot_mapping_no_exports"),
+                foreground=TBD_FG,
+            ).pack(anchor="w")
+            return
+        tv = ttk.Treeview(
+            box,
+            columns=("var", "path"),
+            show="headings",
+            height=min(20, max(3, len(exports))),
+        )
+        tv.heading("var", text=t("voice_bot_mapping_col_channel_var"))
+        tv.heading("path", text=t("voice_bot_mapping_col_crm_path"))
+        tv.column("var", width=240, anchor="w")
+        tv.column("path", width=540, anchor="w")
+        for e in exports:
+            tv.insert(
+                "", "end",
+                values=(e.get("key") or "", e.get("value") or ""),
+            )
+        tv.pack(fill="x", pady=(2, 0))
+
+    def _render_set(self, node: dict) -> None:
+        nid = node.get("id", "")
+        rows = _extract_set_vars(node)
+        title = t("voice_bot_mapping_set_title").format(id=nid, n=len(rows))
+        box = ttk.LabelFrame(self._body, text=title, padding=8)
+        box.pack(fill="x", pady=(0, 8))
+        if not rows:
+            ttk.Label(
+                box, text=t("voice_bot_mapping_set_empty"),
+                foreground=TBD_FG,
+            ).pack(anchor="w")
+            return
+        tv = ttk.Treeview(
+            box,
+            columns=("var", "val"),
+            show="headings",
+            height=min(20, max(3, len(rows))),
+        )
+        tv.heading("var", text=t("voice_bot_mapping_col_var"))
+        tv.heading("val", text=t("voice_bot_mapping_col_value"))
+        tv.column("var", width=220, anchor="w")
+        tv.column("val", width=540, anchor="w")
+        for r in rows:
+            tv.insert(
+                "", "end",
+                values=(r.get("key") or "", str(r.get("value", ""))),
+            )
+        tv.pack(fill="x")
 
 
 class VoiceBotPromptsPanel(ttk.Frame):

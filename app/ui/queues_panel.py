@@ -29,26 +29,26 @@ AGENT_QUEUE_TYPES = (0, 1, 4, 5, 10)
 # so naming drift in Webitel doesn't break the check.
 CC_CHECKLIST: tuple[tuple[str, str, str], ...] = (
     # Unsigned (CC_Uns)
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat Сегодня"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Агенты _100%_new сегодня"),
-    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Агент _100%_new вчера"),
-    ("Unsigned",         "Predictive (Agent)", "СС_Unsigned_Today_Sun и HollyD_Agent_100%"),
+    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat Today"),
+    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agents _100%_new today"),
+    ("Unsigned",         "Predictive (Agent)", "CC_Unsigned Agent _100%_new yesterday"),
+    ("Unsigned",         "Predictive (Agent)", "СС_Unsigned_Today_Sun&HollyD_Agent_100%"),
     ("Unsigned",         "Predictive (Agent)", "CC_Unsigned_Agents_Night"),
     ("Unsigned",         "Predictive (Agent)", "CC_Unsigned appliactions_call_backs"),
-    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat сегодня"),
-    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat вчера"),
+    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat today"),
+    ("Unsigned",         "VoiceBot",           "CC_Unsigned 60%_VoiceBot_repeat yesterday"),
     ("Unsigned",         "VoiceBot",           "CC_unsigned_IVR_small"),
     ("Unsigned",         "VoiceBot",           "CC_Unsigned_telesales_VoiceBot"),
     ("Unsigned",         "Inbound",            "CC_Inbound_Unsigned"),
     # Unfinished (CC_Unf)
     ("Unfinished",       "Predictive (Agent)", "CC_Unfinished_Agents_Night"),
-    ("Unfinished",       "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat вчера"),
+    ("Unfinished",       "Predictive (Agent)", "CC_Unsigned Agents_40%_repeat yesterday"),
     ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Today_Agent_50%"),
     ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Today_Sun&HollyD_Agent_100%"),
     ("Unfinished",       "Predictive (Agent)", "СС_Unfinished_Yesterday_Agent_20%"),
     ("Unfinished",       "Predictive (Agent)", "CC_Unfinished_after_VB"),
-    ("Unfinished",       "Predictive (Agent)", "CC_ Today_Documents_agents>1/2 часа"),
-    ("Unfinished",       "VoiceBot",           "CC_Documents_VoiceBot<1/2 часа"),
+    ("Unfinished",       "Predictive (Agent)", "CC_ Today_Documents_agents>1/2h"),
+    ("Unfinished",       "VoiceBot",           "CC_Documents_VoiceBot<1/2h"),
     ("Unfinished",       "VoiceBot",           "СС_Unfinished_Today_Bot_50%"),
     ("Unfinished",       "VoiceBot",           "СС_Unfinished_Yesterday_Bot_ 80%"),
     ("Unfinished",       "VoiceBot",           "CC_Unfinished_ 10-15days_100%_Voicebot"),
@@ -62,7 +62,7 @@ CC_CHECKLIST: tuple[tuple[str, str, str], ...] = (
     # Inbound (hotline)
     ("Inbound (hotline)", "Inbound",           "CC_HotLine"),
     # Telesales
-    ("Telesales",        "Inbound",            "CC Входящий Сон и Продано"),
+    ("Telesales",        "Inbound",            "CC Inbound Sleep and Sold"),
     # Other
     ("Other",            "Predictive (Agent)", "CC_Callbacks"),
     ("Other",            "Predictive (Agent)", "СС_Duplicates"),

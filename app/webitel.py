@@ -412,6 +412,19 @@ class WebitelClient:
                 continue
         return out
 
+    def list_voice_schemas(self) -> list[ChatSchema]:
+        """All `type=voice` routing schemas. Возвращает тот же лёгкий
+        ``ChatSchema`` контейнер `{id, name}` для UI-пикеров (имя класса
+        историческое — он используется и для chat, и для voice)."""
+        data = self._get("/routing/schema?type=voice&size=500")
+        out: list[ChatSchema] = []
+        for it in data.get("items", []) or []:
+            try:
+                out.append(ChatSchema(id=int(it.get("id")), name=it.get("name", "")))
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def get_schema(self, schema_id: int) -> dict:
         """Read the full routing schema object: {id, name, type, schema (compiled),
         payload (visual), created_at, updated_at, updated_by, tags, ...}.

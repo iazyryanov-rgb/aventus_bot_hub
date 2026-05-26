@@ -637,7 +637,10 @@ CO_VOICE_FIRST_MESSAGE = (
 VOICE_BOT_TOOL_IDS: dict[str, dict[str, dict[str, str]]] = {
     "CO_": {
         "collection": {
-            "save_call_result": "tool_6401krh3cx1sfwbtwq455cmmbpj8",
+            # Replaces legacy tool_6401krh3cx1sfwbtwq455cmmbpj8 (owned by
+            # elevenlabs@credito365.co, viewer-only). The shared hub workspace
+            # key has editor role on this one.
+            "save_call_result": "tool_7701ks8cxvm7ftxt47yyqkart24e",
         },
         "cc": {},
     },
@@ -647,7 +650,126 @@ VOICE_BOT_TOOL_IDS: dict[str, dict[str, dict[str, str]]] = {
         },
         "cc": {},
     },
+    "AR_": {
+        # Снапшот body schema подсажен из PE_/collection как стартовый
+        # шаблон (2026-05-26). tool_id ещё не зарегистрирован в ElevenLabs
+        # — оператор привязывает через «Pick tool…» когда создаст реальный
+        # tool в workspace для Lendi CRM, либо оставляет пустым и правит
+        # значения локально, без push.
+        "collection": {"save_call_result": ""},
+        "cc": {},
+    },
 }
+
+
+# ---- Per-(company, sector, tool name) overrides chosen by the operator
+#      through the «Pick tool from workspace…» dialog. File layout:
+#
+#        {
+#          "CO_": {
+#            "collection": {"save_call_result": "tool_..."},
+#            "cc":         {"save_call_result": "tool_..."}
+#          },
+#          ...
+#        }
+#
+#      Override wins over VOICE_BOT_TOOL_IDS above. Empty / missing override
+#      falls through to the default.
+
+def tool_id_overrides_path():
+    return data_dir() / "voice_bot_tool_overrides.json"
+
+
+def _load_tool_id_overrides() -> dict:
+    p = tool_id_overrides_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_tool_id_overrides(overrides: dict) -> None:
+    p = tool_id_overrides_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            json.dumps(overrides, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def get_tool_id(
+    company_key: str, sector: str, tool_name: str,
+) -> str:
+    """Resolve effective tool id for (company, sector, tool name).
+
+    Order: operator override (from ``data/voice_bot_tool_overrides.json``)
+    → ``VOICE_BOT_TOOL_IDS`` baked-in default → ``""``.
+    """
+    overrides = _load_tool_id_overrides()
+    override = (
+        ((overrides.get(company_key) or {}).get(sector) or {}).get(tool_name)
+    )
+    if isinstance(override, str) and override.strip():
+        return override.strip()
+    return (
+        ((VOICE_BOT_TOOL_IDS.get(company_key) or {})
+         .get(sector) or {})
+        .get(tool_name, "")
+    )
+
+
+def set_tool_id_override(
+    company_key: str, sector: str, tool_name: str, tool_id: str,
+) -> None:
+    """Persist operator's pick of ``tool_id`` for (company, sector, tool name).
+    Empty ``tool_id`` clears the override (falls back to default)."""
+    overrides = _load_tool_id_overrides()
+    company_bucket = overrides.setdefault(company_key, {})
+    sector_bucket = company_bucket.setdefault(sector, {})
+    if tool_id.strip():
+        sector_bucket[tool_name] = tool_id.strip()
+    else:
+        sector_bucket.pop(tool_name, None)
+        if not sector_bucket:
+            company_bucket.pop(sector, None)
+        if not company_bucket:
+            overrides.pop(company_key, None)
+    _save_tool_id_overrides(overrides)
+
+
+# ---- Enum sets aggregated from app.action_trees ------------------------
+# Used by the cross-check panel in the Prompts tab to compare action-tree
+# enums (the source of truth for the CRM contract per company) against
+# what the ElevenLabs tool actually accepts in its property `enum` lists.
+
+def enum_sets_from_tree(tree: Optional[dict]) -> dict[str, list[str]]:
+    """Группируем enum-значения action-tree по полю CRM-контракта
+    (``produces``). У одной CRM-переменной могут быть несколько источников
+    в дереве (например, ``contact_result`` под client и под third_party);
+    объединяем в один upper-set, сохраняя порядок появления."""
+    if not tree:
+        return {}
+    out: dict[str, list[str]] = {}
+    seen: dict[str, set[str]] = {}
+    for var in (tree.get("variables") or {}).values():
+        produces = var.get("produces") if isinstance(var, dict) else None
+        values = var.get("values") if isinstance(var, dict) else None
+        if not produces or not isinstance(values, list):
+            continue
+        bucket = out.setdefault(produces, [])
+        seen_set = seen.setdefault(produces, set())
+        for v in values:
+            val = v.get("value") if isinstance(v, dict) else None
+            if val and val not in seen_set:
+                bucket.append(val)
+                seen_set.add(val)
+    return out
 
 
 # Per-company per-sector defaults. Mirrors VOICE_BOT_TOOL_IDS shape:

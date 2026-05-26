@@ -55,8 +55,9 @@ WA_MASS_PROVIDER = "infobip-wa-mass"
 DEFAULT_DAYS = 14
 CACHE_TTL_SEC = 300
 
-# Per-company CRM database name (MySQL only — Postgres tenants use
-# companies.json:crm_db_name which already routes the connection).
+# Per-company CRM database name. Источник правды — companies.json:crm_db_name
+# (та же запись, что использует ``db.connect_for_company``). Карта ниже
+# оставлена как fallback, если в companies.json ключ ещё не заполнен.
 _MYSQL_DB_NAME = {
     "CO_":  "prod_credito365_api",
     "CO2_": "prod_tuparcero_api",
@@ -73,6 +74,41 @@ _MYSQL_DB_NAME = {
 _RESULT_FILTERS: dict[str, list[dict[str, str]]] = {
     "CO_":  [{"groupLabel": "direction", "itemLabel": "wa_bot_inbound"}],
     "CO2_": [{"groupLabel": "direction", "itemLabel": "wa_bot_inbound"}],
+}
+
+
+# Per-engine «как определить, что у клиента была WA-Infobip отправка». Для
+# CO MySQL это `sms.smsProvider='infobip-wa-mass'`, для PE Postgres —
+# `public.notification.transmitter='info_bip'` (подтверждено по
+# admin.prestamo365.pe). Структура одинаковая, чтобы добавлять новые
+# движки без переписывания SQL-функций.
+_INFOBIP_RULES: dict[str, dict] = {
+    "mysql": {
+        "table": "sms",
+        "transmitter_column": "smsProvider",
+        "transmitter_value": WA_MASS_PROVIDER,
+        "timestamp_column": "sendDate",
+        "user_id_column": "userId",
+        "status_column": "status",
+        "status_error_value": "error",
+        "user_table": "user",
+        "user_phone_column": "main_phone_number",
+    },
+    "postgres": {
+        # PE_ rule per CRM admin screenshot (2026-05-26): notification таблица
+        # хранит все исходящие включая Infobip WhatsApp; столбец
+        # `transmitter_id` — FK на справочник (label `info_bip` — это значение
+        # в reference-таблице, не литерал в notification). Имя справочника
+        # резолвится в рантайме через ``_resolve_pg_transmitter_id``.
+        "table": "public.notification",
+        "transmitter_column": "transmitter_id",
+        "transmitter_label": "info_bip",  # значение в справочнике
+        "timestamp_column": "created_at",
+        "user_id_column": "user_id",
+        # У PE notifications сам phone лежит прямо в `destination`, поэтому
+        # JOIN на user не нужен для ARM-split.
+        "destination_column": "destination",
+    },
 }
 
 
@@ -156,7 +192,26 @@ def invalidate(company_key: Optional[str] = None) -> None:
 # ---------------------------------------------------------------------
 
 def _db_name(company: Company) -> Optional[str]:
+    """Resolve CRM DB name for funnel queries.
+
+    Источник правды — companies.json:crm_db_name (тот же, что использует
+    ``db.connect_for_company``). Если запись там пуста — fallback в
+    локальный hardcoded `_MYSQL_DB_NAME` (исторически только CO_/CO2_).
+    """
+    from .data import load_raw
+    info = load_raw().get(company.key) or {}
+    name = str(info.get("crm_db_name") or "").strip()
+    if name:
+        return name
     return _MYSQL_DB_NAME.get(company.key) or None
+
+
+def _db_engine(company: Company) -> str:
+    """Возвращает 'mysql' | 'postgres' для компании. Дефолт — mysql,
+    как и в ``db.connect_for_company``."""
+    from .data import load_raw
+    info = load_raw().get(company.key) or {}
+    return (info.get("crm_db_engine") or "mysql").lower()
 
 
 def _q(db_name: str, table: str) -> str:
@@ -328,6 +383,7 @@ def compute_funnel(
             return cached
 
     db_name = _db_name(company)
+    engine = _db_engine(company)
     digits, champ, cand = _resolve_ab_config(company)
     filters = _RESULT_FILTERS.get(company.key) or []
     chats_by_phone = _fetch_chats_by_phone(company, days)
@@ -338,9 +394,23 @@ def compute_funnel(
             champion_schema=champ,
             candidate_schema=cand,
             error=(
-                f"CRM DB name для {company.key} не настроен в "
-                f"`app/wa_bot_overview.py:_MYSQL_DB_NAME`. Phase 2 "
-                f"поддерживает пока только CO_."
+                f"CRM DB name для {company.key} не настроен — заполни "
+                f"`crm_db_name` в `data/companies.json`."
+            ),
+            fetched_at=datetime.now(),
+        )
+        _cache_set(company.key, days, rep)
+        return rep
+
+    if engine not in ("mysql", "postgres"):
+        rep = FunnelReport(
+            days=[],
+            candidate_digits=digits,
+            champion_schema=champ,
+            candidate_schema=cand,
+            error=(
+                f"{company.key}: CRM engine `{engine}` не поддерживается "
+                f"(пока только mysql / postgres). См. `app/wa_bot_overview.py`."
             ),
             fetched_at=datetime.now(),
         )
@@ -363,11 +433,18 @@ def compute_funnel(
         )
 
     try:
-        rep = _query_funnel(
-            conn, db_name, start_dt, days,
-            set(str(d) for d in digits), filters,
-            chats_by_phone,
-        )
+        if engine == "postgres":
+            rep = _query_funnel_postgres(
+                conn, start_dt, days,
+                set(str(d) for d in digits),
+                chats_by_phone,
+            )
+        else:
+            rep = _query_funnel(
+                conn, db_name, start_dt, days,
+                set(str(d) for d in digits), filters,
+                chats_by_phone,
+            )
         rep.candidate_digits = digits
         rep.champion_schema = champ
         rep.candidate_schema = cand
@@ -580,6 +657,181 @@ def _query_funnel(
                     target.promise_extension += 1
                     if _extension_fulfilled(p_loan_id, planned_at, ext_by_user, uid):
                         target.fulfilled_extension += 1
+
+    return _finalize(by_day, days)
+
+
+def _resolve_pg_transmitter_id(conn, label: str) -> int:
+    """Найти целочисленный ``transmitter_id`` в PE reference-таблице по
+    строковой метке (например ``info_bip``).
+
+    PE-схема хранит трансмиттеры в отдельной таблице (имя в каталоге не
+    зафиксировано); admin-UI отображает строковую метку через JOIN. Чтобы
+    не гадать имя схемы/таблицы/колонки, бежим по information_schema:
+
+    1. Находим все таблицы с именем ``transmitter`` (любой схемы), сортируем
+       handbook → public → прочие.
+    2. В каждой пробуем text-колонки в порядке вероятности (name, code,
+       slug, label, key) — first match wins.
+    3. Возвращаем id; если ничего не нашлось, кидаем ValueError с описанием.
+
+    Postgres'овский catch: при первом же SQL-сбое транзакция уходит в
+    aborted state — после каждой неудачной попытки делаем ``rollback()``.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT table_schema, table_name
+            FROM information_schema.tables
+            WHERE table_name = 'transmitter'
+            ORDER BY
+                CASE table_schema
+                    WHEN 'handbook' THEN 0
+                    WHEN 'public'   THEN 1
+                    ELSE 2
+                END
+            """
+        )
+        tables = list(cur.fetchall())
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+
+    if not tables:
+        raise ValueError(
+            f"Не нашёл reference-таблицу `transmitter` ни в одной схеме "
+            f"(нужно для resolving label '{label}' → transmitter_id). "
+            "Сообщи имя справочника в _INFOBIP_RULES."
+        )
+
+    label_columns_priority = ("name", "code", "slug", "label", "key")
+
+    for schema, table in tables:
+        # Discover text columns in this candidate.
+        try:
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+                  AND data_type IN ('character varying', 'text', 'citext')
+                """,
+                (schema, table),
+            )
+            text_cols = {r[0] for r in cur.fetchall()}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            continue
+
+        for col in label_columns_priority:
+            if col not in text_cols:
+                continue
+            try:
+                cur.execute(
+                    f'SELECT id FROM "{schema}"."{table}" '
+                    f'WHERE "{col}" = %s LIMIT 1',
+                    (label,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return int(row[0])
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                continue
+
+    raise ValueError(
+        f"Метка трансмиттера '{label}' не найдена ни в одной из "
+        f"reference-таблиц: {tables}. Проверь имя метки в admin или "
+        "укажи схему/колонку явно в _INFOBIP_RULES."
+    )
+
+
+def _query_funnel_postgres(
+    conn,
+    start_dt: datetime,
+    days: int,
+    candidate_digits_set: set[str],
+    chats_by_phone: dict[str, list[datetime]],
+) -> FunnelReport:
+    """Postgres-flavoured funnel: на сейчас считаем только sent + engaged.
+
+    Источник правды для отправок — `public.notification` с
+    `transmitter='info_bip'` (правило подтверждено по admin.prestamo365.pe
+    2026-05-26). Engagement-сигнал — Webitel `chats_by_phone` (cross-tenant,
+    не зависит от CRM).
+
+    Остальные ветки (results / promises / extensions / fulfilled) — TBD,
+    пока пишут 0. Под них нужны правила:
+      * как помечается «зарегистрированный ботом результат» в PE
+        (`public.communication` + какое поле? action_tree id?);
+      * связь communication → promise_to_pay (через какой FK?);
+      * как помечается extension у loan'а (есть ли `loan.is_extended` /
+        отдельная таблица extension в Postgres);
+      * как matched `income.received_at ≤ promise_to_pay.promise_date + 1д`
+        для full-payment fulfilled (`public.income` + `public.promise_to_pay`).
+
+    SQL ниже использует только колонки, подтверждённые по UI screenshot:
+    `id, user_id, created_at, delivery, destination, transmitter`.
+    """
+    rule = _INFOBIP_RULES["postgres"]
+    transmitter_id = _resolve_pg_transmitter_id(conn, rule["transmitter_label"])
+    cur = conn.cursor()
+
+    cur.execute(
+        f"SELECT id, {rule['user_id_column']}, {rule['timestamp_column']}, "
+        f"       {rule['destination_column']} "
+        f"FROM {rule['table']} "
+        f"WHERE {rule['transmitter_column']} = %s "
+        f"  AND {rule['timestamp_column']} >= %s "
+        f"ORDER BY {rule['timestamp_column']} ASC",
+        (transmitter_id, start_dt),
+    )
+    sends: list[tuple] = list(cur.fetchall())
+
+    by_day: dict[date, DayMetrics] = {}
+    user_first_send: dict[int, datetime] = {}
+    user_phone: dict[int, str] = {}
+    user_arm: dict[int, str] = {}
+
+    for _send_id, user_id, send_date, destination in sends:
+        if user_id is None:
+            continue
+        d = send_date.date() if hasattr(send_date, "date") else send_date
+        bucket = by_day.setdefault(d, DayMetrics(date=d))
+        arm = _ab_arm(destination, candidate_digits_set)
+        if arm in ("champion", "candidate"):
+            getattr(bucket, arm).sent += 1
+        if arm == "unknown":
+            continue
+        user_arm[user_id] = arm
+        if user_id not in user_first_send or send_date < user_first_send[user_id]:
+            user_first_send[user_id] = send_date
+            user_phone[user_id] = (destination or "").strip()
+
+    # Engagement: Webitel chat в окне [send, send+3д] от phone клиента.
+    # Mirror CO логики, у которой engagement не CRM-зависимый.
+    for uid, phone in user_phone.items():
+        arm = user_arm.get(uid)
+        if arm not in ("champion", "candidate"):
+            continue
+        send_dt = user_first_send.get(uid)
+        if not send_dt:
+            continue
+        d = send_dt.date() if hasattr(send_dt, "date") else send_dt
+        bucket = by_day.setdefault(d, DayMetrics(date=d))
+        for chat_dt in chats_by_phone.get(phone) or []:
+            if send_dt <= chat_dt <= send_dt + timedelta(days=3):
+                getattr(bucket, arm).engaged += 1
+                break  # макс 1 engaged point per user
 
     return _finalize(by_day, days)
 

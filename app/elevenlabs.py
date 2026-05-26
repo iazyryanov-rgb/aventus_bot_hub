@@ -458,3 +458,37 @@ def update_tool(
     return _request(
         "PATCH", f"/v1/convai/tools/{tool_id}", api_key=api_key, body=payload,
     )
+
+
+def list_phone_numbers(*, api_key: Optional[str] = None) -> list[dict]:
+    """All phone numbers зарегистрированные в workspace + к какому agent
+    привязан каждый. GET /v1/convai/phone-numbers возвращает список;
+    каждый item — ``{phone_number_id, phone_number, label, provider,
+    supports_inbound, supports_outbound, assigned_agent: {agent_id,
+    agent_name}}``. Возвращаем список как есть; UI фильтрует по agent_id."""
+    resp = _request("GET", "/v1/convai/phone-numbers", api_key=api_key)
+    if isinstance(resp, list):
+        return resp
+    return list(resp.get("phone_numbers") or [])
+
+
+def list_tools(*, api_key: Optional[str] = None) -> list[dict]:
+    """All webhook tools the API key can see in this workspace.
+
+    GET /v1/convai/tools. Каждый элемент — `{id, tool_config: {name,
+    description, type, ...}, access_info: ..., ...}`. Возвращаем как есть;
+    UI читает id/имя через :func:`extract_tool_meta`.
+    """
+    resp = _request("GET", "/v1/convai/tools", api_key=api_key)
+    return list(resp.get("tools") or [])
+
+
+def extract_tool_meta(tool: dict) -> tuple[str, str]:
+    """Возвращает ``(tool_id, name)`` из элемента ``list_tools`` или ответа
+    ``get_tool``."""
+    if not isinstance(tool, dict):
+        return "", ""
+    tid = tool.get("id") or tool.get("tool_id") or ""
+    cfg = tool.get("tool_config") or {}
+    name = cfg.get("name") or tool.get("name") or ""
+    return str(tid), str(name)

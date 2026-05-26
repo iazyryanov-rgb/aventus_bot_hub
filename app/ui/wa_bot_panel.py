@@ -117,7 +117,7 @@ class WaBotOverviewPanel(ttk.Frame):
         code = company.key.rstrip("_")
         ttk.Label(
             self,
-            text=f"{code} — {company.name} ({company.country})",
+            text=f"{code} — {company.name} ({company.country})  ·  {t('sector_' + self._sector)}",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
@@ -446,7 +446,7 @@ class WaBotMappingPanel(ttk.Frame):
         code = company.key.rstrip("_")
         ttk.Label(
             self,
-            text=f"{code} — {company.name} ({company.country})",
+            text=f"{code} — {company.name} ({company.country})  ·  {t('sector_' + self._sector)}",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
 
@@ -1746,7 +1746,7 @@ class WaBotSendersPanel(ttk.Frame):
         code = company.key.rstrip("_")
         ttk.Label(
             self,
-            text=f"{code} — {company.name} ({company.country})",
+            text=f"{code} — {company.name} ({company.country})  ·  {t('sector_' + self._sector)}",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
 

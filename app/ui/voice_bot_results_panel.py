@@ -33,14 +33,17 @@ from typing import Any, Callable, Optional
 from ..data import Company
 from ..elevenlabs import (
     ElevenLabsError,
+    extract_tool_meta,
     get_elevenlabs_key,
+    get_tool,
+    list_tools,
     set_elevenlabs_key,
     update_tool,
 )
 from ..i18n import t
 from ..paths import data_dir
 from ..sectors import DEFAULT_SECTOR, SECTORS
-from ..voice_bot_config import VOICE_BOT_TOOL_IDS
+from ..voice_bot_config import get_tool_id, set_tool_id_override
 from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
 
 
@@ -181,9 +184,54 @@ class VoiceBotResultsPanel(ttk.Frame):
         code = company.key.rstrip("_")
         ttk.Label(
             self,
-            text=f"{code} — {company.name} ({company.country})",
+            text=f"{code} — {company.name} ({company.country})  ·  {t('sector_' + self._sector)}",
             font=("Segoe UI", 11, "bold"),
         ).pack(anchor="w", padx=14, pady=(0, 8))
+
+        # ---- Top toolbar (panel-wide actions) — всегда видим, даже когда
+        #      локального снапшота tool'а ещё нет: пикер должен быть
+        #      доступен для bootstrap'а.
+        tool_id = get_tool_id(company.key, self._sector, "save_call_result")
+        self._tool_id = tool_id
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill="x", padx=12, pady=(0, 8))
+        self._tool_id_var = tk.StringVar(
+            value=f"tool_id: {tool_id}" if tool_id
+            else t("voice_bot_results_no_tool_id"),
+        )
+        ttk.Label(
+            toolbar,
+            textvariable=self._tool_id_var,
+            foreground=META_FG if tool_id else TBD_FG,
+            font=("Consolas", 9),
+        ).pack(side="left")
+        if tool_id and self._tool:
+            self._push_btn = ttk.Button(
+                toolbar,
+                text=t("voice_bot_results_push"),
+                command=self._push_tool,
+                style="Accent.TButton",
+            )
+            self._push_btn.pack(side="left", padx=(12, 0))
+        else:
+            self._push_btn = None
+        ttk.Button(
+            toolbar,
+            text=t("voice_bot_results_pick_tool"),
+            command=self._pick_tool_dialog,
+        ).pack(side="left", padx=(6, 0))
+        if self._tool:
+            ttk.Button(
+                toolbar,
+                text=t("voice_bot_results_copy_json"),
+                command=self._copy_json,
+            ).pack(side="left", padx=(6, 0))
+        # Кнопка «Ключ ElevenLabs для <COMPANY>» убрана: ключ один на все
+        # проекты (задаётся через Promts → API ключ ElevenLabs), per-company
+        # override в `data/api_keys.json:elevenlabs_by_company` остаётся
+        # как fallback, но из UI больше не предлагаем.
+        self._status = ttk.Label(toolbar, text="", foreground=META_FG)
+        self._status.pack(side="left", padx=(12, 0))
 
         if not self._tool:
             ttk.Label(
@@ -195,52 +243,14 @@ class VoiceBotResultsPanel(ttk.Frame):
                 wraplength=900,
                 justify="left",
             ).pack(anchor="w", padx=14, pady=12)
-            return
-
-        # ---- Top toolbar (panel-wide actions) ----
-        tool_id = (
-            ((VOICE_BOT_TOOL_IDS.get(company.key) or {})
-             .get(self._sector) or {})
-            .get("save_call_result", "")
-        )
-        self._tool_id = tool_id
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", padx=12, pady=(0, 8))
-        if tool_id:
             ttk.Label(
-                toolbar,
-                text=f"tool_id: {tool_id}",
+                self,
+                text=t("voice_bot_results_no_file_hint"),
                 foreground=META_FG,
-                font=("Consolas", 9),
-            ).pack(side="left")
-            self._push_btn = ttk.Button(
-                toolbar,
-                text=t("voice_bot_results_push"),
-                command=self._push_tool,
-                style="Accent.TButton",
-            )
-            self._push_btn.pack(side="left", padx=(12, 0))
-        else:
-            ttk.Label(
-                toolbar,
-                text=t("voice_bot_results_no_tool_id"),
-                foreground=TBD_FG,
-            ).pack(side="left")
-            self._push_btn = None
-        ttk.Button(
-            toolbar,
-            text=t("voice_bot_results_copy_json"),
-            command=self._copy_json,
-        ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            toolbar,
-            text=t("voice_bot_results_set_key").format(
-                company=company.key.rstrip("_"),
-            ),
-            command=self._set_company_key,
-        ).pack(side="left", padx=(6, 0))
-        self._status = ttk.Label(toolbar, text="", foreground=META_FG)
-        self._status.pack(side="left", padx=(12, 0))
+                wraplength=900,
+                justify="left",
+            ).pack(anchor="w", padx=14, pady=(0, 12))
+            return
 
         # ---- Body: left tree | right editor ----
         body = ttk.PanedWindow(self, orient="horizontal")
@@ -690,7 +700,39 @@ class VoiceBotResultsPanel(ttk.Frame):
     # ---- Endpoint URL editor ----
 
     def _build_endpoint_editor(self) -> None:
-        schema = (self._tool or {}).get("api_schema") or {}
+        tool = self._tool or {}
+        schema = tool.get("api_schema") or {}
+        # Tool-level name (как он называется в ElevenLabs) — нужно менять
+        # под каждый тенант (PE_save_call_result → AR1_save_call_result).
+        ttk.Label(
+            self._editor_frame, text=t("voice_bot_results_tool_name_label"),
+            foreground=META_FG,
+        ).pack(anchor="w", pady=(0, 2))
+        name_var = self._make_var(str(tool.get("name") or ""))
+        ttk.Entry(
+            self._editor_frame, textvariable=name_var, width=60,
+        ).pack(fill="x", pady=(0, 8))
+        self._register_editor(
+            getter=lambda: name_var.get().strip(),
+            applier=lambda v: tool.__setitem__("name", v),
+        )
+        # Tool-level description (LLM-промт, что делает этот tool).
+        ttk.Label(
+            self._editor_frame,
+            text=t("voice_bot_results_tool_desc_label"),
+            foreground=META_FG,
+        ).pack(anchor="w", pady=(0, 2))
+        tool_desc = tk.Text(
+            self._editor_frame, height=4, wrap="word", font=("Segoe UI", 9),
+        )
+        tool_desc.insert("1.0", str(tool.get("description") or ""))
+        tool_desc.pack(fill="x", pady=(0, 8))
+        self._bind_text_dirty(tool_desc)
+        self._register_editor(
+            getter=lambda: tool_desc.get("1.0", "end-1c"),
+            applier=lambda v: tool.__setitem__("description", v),
+        )
+
         ttk.Label(
             self._editor_frame, text="url:", foreground=META_FG,
         ).pack(anchor="w", pady=(4, 2))
@@ -748,6 +790,49 @@ class VoiceBotResultsPanel(ttk.Frame):
             self._build_readonly_text(f"(property {property_id} missing)")
             return
         value_type = prop.get("value_type") or "?"
+
+        # Rename — позволяет менять `id` поля (имя property в
+        # request_body_schema). Применяется к копии prop в `self._props`
+        # И к сырому списку под ``api_schema.request_body_schema.properties``
+        # (нужно искать его по старому id, потому что _props — это маппинг
+        # `{id → dict}`, который пересоздаётся при render_tree).
+        ttk.Label(
+            self._editor_frame, text=t("voice_bot_results_prop_id_label"),
+            foreground=META_FG,
+        ).pack(anchor="w", pady=(0, 2))
+        id_var = self._make_var(property_id)
+        ttk.Entry(
+            self._editor_frame, textvariable=id_var, width=40,
+        ).pack(fill="x", pady=(0, 6))
+        ttk.Label(
+            self._editor_frame, text=t("voice_bot_results_prop_id_hint"),
+            foreground=META_FG, wraplength=560, justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        def _rename_property(new_id: str) -> None:
+            new_id = (new_id or "").strip()
+            if not new_id or new_id == property_id:
+                return
+            schema = ((self._tool or {}).get("api_schema") or {})
+            body = schema.get("request_body_schema") or {}
+            props_list = body.get("properties") or []
+            if isinstance(props_list, list):
+                for p in props_list:
+                    if isinstance(p, dict) and p.get("id") == property_id:
+                        p["id"] = new_id
+                        break
+            elif isinstance(props_list, dict) and property_id in props_list:
+                props_list[new_id] = props_list.pop(property_id)
+            # `prop` уже ссылается на тот же dict, что и в props_list —
+            # обновляем id в нём же, чтобы было консистентно если рендер
+            # не вызвался.
+            prop["id"] = new_id
+
+        self._register_editor(
+            getter=lambda: id_var.get(),
+            applier=_rename_property,
+        )
+
         ttk.Label(
             self._editor_frame,
             text=f"value_type: {value_type}",
@@ -1065,3 +1150,208 @@ class VoiceBotResultsPanel(ttk.Frame):
             text=t("voice_bot_results_copied").format(n=len(text)),
             foreground=OK_FG,
         )
+
+    # ------------------------------------------------------------------
+    # Pick tool from workspace
+    # ------------------------------------------------------------------
+
+    def _pick_tool_dialog(self) -> None:
+        """Список tool'ов воркспейса → выбор → запись override + fetch
+        body + перерисовка дерева."""
+        if self._dirty:
+            messagebox.showwarning(
+                t("voice_bot_results_pick_tool"),
+                t("voice_bot_results_push_dirty_warning"),
+                parent=self.winfo_toplevel(),
+            )
+            return
+        if not get_elevenlabs_key(self._company.key):
+            messagebox.showwarning(
+                t("voice_bot_key_dialog_title"),
+                t("voice_bot_key_missing"),
+                parent=self.winfo_toplevel(),
+            )
+            return
+        self._status.configure(
+            text=t("voice_bot_results_listing_tools"), foreground=META_FG,
+        )
+        threading.Thread(target=self._list_tools_worker, daemon=True).start()
+
+    def _list_tools_worker(self) -> None:
+        try:
+            tools = list_tools(api_key=get_elevenlabs_key(self._company.key))
+            err: Optional[str] = None
+        except ElevenLabsError as exc:
+            tools, err = [], str(exc)
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: self._render_tool_picker(tools, err))
+
+    def _render_tool_picker(
+        self, tools: list[dict], err: Optional[str],
+    ) -> None:
+        if err:
+            self._status.configure(text=err, foreground=ERR_FG)
+            messagebox.showerror(
+                t("voice_bot_results_pick_tool"), err,
+                parent=self.winfo_toplevel(),
+            )
+            return
+        if not tools:
+            self._status.configure(
+                text=t("voice_bot_results_no_tools"), foreground=META_FG,
+            )
+            messagebox.showinfo(
+                t("voice_bot_results_pick_tool"),
+                t("voice_bot_results_no_tools_long"),
+                parent=self.winfo_toplevel(),
+            )
+            return
+
+        dialog = tk.Toplevel(self.winfo_toplevel())
+        dialog.title(t("voice_bot_results_pick_tool"))
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+        tree = ttk.Treeview(
+            dialog, columns=("name", "tool_id"),
+            show="headings", height=min(15, max(5, len(tools))),
+        )
+        tree.heading("name", text=t("voice_bot_results_tool_name"))
+        tree.heading("tool_id", text=t("voice_bot_tool_id"))
+        tree.column("name", width=320, anchor="w")
+        tree.column("tool_id", width=360, anchor="w")
+        # Если уже привязан tool — выделим его как текущий.
+        current = self._tool_id
+        focused = None
+        for tool in tools:
+            tid, name = extract_tool_meta(tool)
+            iid = tree.insert(
+                "", "end", values=(name or "—", tid),
+            )
+            if tid and tid == current:
+                focused = iid
+        tree.pack(fill="both", expand=True, padx=10, pady=10)
+        if focused:
+            tree.selection_set(focused)
+            tree.see(focused)
+
+        def use_selected() -> None:
+            sel = tree.selection()
+            if not sel:
+                return
+            vals = tree.item(sel[0], "values")
+            picked_name = str(vals[0]) if vals[0] != "—" else ""
+            picked_id = str(vals[1])
+            if not picked_id:
+                return
+            if not messagebox.askyesno(
+                t("voice_bot_results_pick_tool"),
+                t("voice_bot_results_pick_confirm").format(
+                    name=picked_name or "—",
+                    tool_id=picked_id,
+                ),
+                parent=dialog,
+            ):
+                return
+            dialog.destroy()
+            self._status.configure(
+                text=t("voice_bot_results_fetching_tool"), foreground=META_FG,
+            )
+            threading.Thread(
+                target=self._fetch_picked_tool_worker,
+                args=(picked_id, picked_name),
+                daemon=True,
+            ).start()
+
+        btns = ttk.Frame(dialog)
+        btns.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(btns, text=t("btn_cancel"), command=dialog.destroy).pack(
+            side="right",
+        )
+        ttk.Button(
+            btns, text=t("voice_bot_results_use_tool"), command=use_selected,
+            style="Accent.TButton",
+        ).pack(side="right", padx=(0, 6))
+        tree.bind("<Double-1>", lambda _e: use_selected())
+
+    def _fetch_picked_tool_worker(
+        self, tool_id: str, tool_name: str,
+    ) -> None:
+        try:
+            tool = get_tool(
+                tool_id, api_key=get_elevenlabs_key(self._company.key),
+            )
+            err: Optional[str] = None
+        except ElevenLabsError as exc:
+            tool, err = None, str(exc)
+        if not self.winfo_exists():
+            return
+        self.after(
+            0, lambda: self._apply_picked_tool(tool_id, tool_name, tool, err),
+        )
+
+    def _apply_picked_tool(
+        self, tool_id: str, tool_name: str,
+        tool: Optional[dict], err: Optional[str],
+    ) -> None:
+        if err or not isinstance(tool, dict):
+            self._status.configure(
+                text=err or "empty response", foreground=ERR_FG,
+            )
+            messagebox.showerror(
+                t("voice_bot_results_pick_tool"),
+                err or "empty response",
+                parent=self.winfo_toplevel(),
+            )
+            return
+        # Persist override + write the tool snapshot to the standard path.
+        set_tool_id_override(
+            self._company.key, self._sector, "save_call_result", tool_id,
+        )
+        try:
+            _save_tool(self._company.key, tool, self._sector)
+        except OSError as exc:
+            self._status.configure(text=str(exc), foreground=ERR_FG)
+            messagebox.showerror(
+                t("voice_bot_results_pick_tool"), str(exc),
+                parent=self.winfo_toplevel(),
+            )
+            return
+        # Update tool_id label + internal state. The Push button visibility
+        # was bound to the initial __init__ state — ask the user to re-open
+        # the tab so the toolbar rebuilds and the tree appears (cheap UX
+        # compromise that avoids a full toolbar/tree reconstruction here).
+        self._tool_id = tool_id
+        self._tool_id_var.set(f"tool_id: {tool_id}")
+        self._tool = tool
+        self._props = _props_by_id(tool)
+        # If we already had a tree built, refresh it in place.
+        if hasattr(self, "tree"):
+            prev_key = self._current_key
+            self._render_tree()
+            if not self._reselect_by_stable_key(prev_key):
+                self._clear_editor() if hasattr(self, "_clear_editor") else None
+                if hasattr(self, "_detail_title"):
+                    self._detail_title.configure(text="")
+                self._current_key = None
+            self._status.configure(
+                text=t("voice_bot_results_pick_done").format(name=tool_name or "—"),
+                foreground=OK_FG,
+            )
+        else:
+            # Bootstrap path: было «no_file», теперь снапшот появился —
+            # сообщаем пользователю про переоткрытие таба, чтобы поднялись
+            # дерево + Push.
+            self._status.configure(
+                text=t("voice_bot_results_pick_done_reopen").format(
+                    name=tool_name or "—",
+                ),
+                foreground=OK_FG,
+            )
+            messagebox.showinfo(
+                t("voice_bot_results_pick_tool"),
+                t("voice_bot_results_pick_done_reopen").format(
+                    name=tool_name or "—",
+                ),
+                parent=self.winfo_toplevel(),
+            )

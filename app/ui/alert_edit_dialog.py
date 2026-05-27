@@ -2,7 +2,12 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Optional
 
-from ..alerts import ALERT_TEMPLATES, SCHEDULE_PRESETS, upsert_bot_alert
+from ..alerts import (
+    ALERT_TEMPLATES,
+    SCHEDULE_PRESETS,
+    templates_for_kind,
+    upsert_bot_alert,
+)
 from ..data import Company
 
 
@@ -37,16 +42,30 @@ class AlertEditDialog(tk.Toplevel):
         self._name.grid(row=0, column=1, sticky="ew", pady=5, padx=(10, 0))
 
         ttk.Label(body, text="Шаблон").grid(row=1, column=0, sticky="w", pady=5)
-        self._template_titles = [title for _, title, _ in ALERT_TEMPLATES]
-        self._template_slugs = [slug for slug, _, _ in ALERT_TEMPLATES]
+        # Фильтруем шаблоны под выбранный тип бота. Если у нас уже
+        # сохранён шаблон, не входящий в фильтр (например, legacy
+        # значение или ручной импорт alerts.json) — добавляем его в
+        # хвост списка, чтобы оператор мог его открыть и пересохранить.
+        kind_templates = list(templates_for_kind(kind))
+        current_slug = self._alert.get("template") or ""
+        if current_slug and current_slug not in {s for s, _, _ in kind_templates}:
+            for t_tuple in ALERT_TEMPLATES:
+                if t_tuple[0] == current_slug:
+                    kind_templates.append(t_tuple)
+                    break
+        self._template_titles = [title for _, title, _ in kind_templates]
+        self._template_slugs = [slug for slug, _, _ in kind_templates]
         self._template = ttk.Combobox(
             body, values=self._template_titles, state="readonly", width=42
         )
-        current_slug = self._alert.get("template", self._template_slugs[0])
+        fallback = self._template_slugs[0] if self._template_slugs else ""
         try:
-            self._template.current(self._template_slugs.index(current_slug))
+            self._template.current(
+                self._template_slugs.index(current_slug or fallback)
+            )
         except ValueError:
-            self._template.current(0)
+            if self._template_slugs:
+                self._template.current(0)
         self._template.grid(row=1, column=1, sticky="ew", pady=5, padx=(10, 0))
         self._template.bind("<<ComboboxSelected>>", lambda _e: self._on_template_change())
 

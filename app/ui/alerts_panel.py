@@ -12,7 +12,9 @@ from ..alerts import (
     ensure_company_topic,
     get_company_topic,
     load_alerts_config,
+    seed_default_voice_alerts,
     send_telegram_message,
+    templates_for_kind,
 )
 from ..alert_format import render_alert_html
 from ..data import Company
@@ -31,6 +33,14 @@ class AlertsPanel(ttk.Frame):
         super().__init__(master)
         self._company = company
         self._kind = kind
+        # Auto-seed дефолтные event-алерты для voice-бота — чтобы они
+        # были видны в планировщике сразу, без ручного «Добавить».
+        # Идемпотентно: повторное открытие панели ничего не дублирует.
+        if kind == "voice":
+            try:
+                seed_default_voice_alerts(company.key)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[alerts_panel] seed_default_voice_alerts failed: {exc}")
         self._cfg = load_alerts_config()
 
         ttk.Label(
@@ -110,10 +120,13 @@ class AlertsPanel(ttk.Frame):
         self._row_to_alert: dict[str, dict] = {}
         self._reload_alerts()
 
-        # Templates reference (collapsible-like, just a labelframe)
+        # Templates reference (collapsible-like, just a labelframe).
+        # Фильтруем по типу бота, чтобы на вкладке Voice Bot не показывать
+        # WA/agents-only шаблоны и наоборот. Шаблоны без явной привязки
+        # в `TEMPLATE_KINDS` показываются всегда (легаси-дефолт).
         ref = ttk.LabelFrame(self, text=t("alerts_templates_ref"), padding=12)
         ref.pack(fill="x", padx=14, pady=(0, 14))
-        for _slug, title, desc in ALERT_TEMPLATES:
+        for _slug, title, desc in templates_for_kind(self._kind):
             row = ttk.Frame(ref)
             row.pack(fill="x", pady=2, anchor="w")
             ttk.Label(row, text=title, font=("Segoe UI", 9, "bold")).pack(anchor="w")

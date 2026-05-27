@@ -44,6 +44,42 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
 
 ALERT_TEMPLATE_BY_SLUG = {slug: (slug, title, desc) for slug, title, desc in ALERT_TEMPLATES}
 
+
+# Какому виду бота применим тот или иной шаблон. Используется UI'ем
+# для фильтрации списка «Доступные шаблоны» и dropdown'а в диалоге
+# создания алерта. Шаблоны, не упомянутые здесь, показываются для ВСЕХ
+# kind'ов (исторический дефолт — большинство dashboard/legacy шаблонов
+# нельзя однозначно отнести к одному типу бота).
+TEMPLATE_KINDS: dict[str, set[str]] = {
+    "voice_analysis_suggestions_prompt": {"voice"},
+    "voice_analysis_suggestions_tool":   {"voice"},
+    "voice_change_applied_prompt":       {"voice"},
+    "voice_change_applied_tool":         {"voice"},
+}
+
+
+def templates_for_kind(kind: str) -> list[tuple[str, str, str]]:
+    """Шаблоны, применимые для данного типа бота. Если шаблон не помечен
+    в TEMPLATE_KINDS — он попадает в результат для любого kind'а
+    (легаси-совместимость). Если помечен — только для перечисленных."""
+    out: list[tuple[str, str, str]] = []
+    for slug, title, desc in ALERT_TEMPLATES:
+        applicable = TEMPLATE_KINDS.get(slug)
+        if applicable is None or kind in applicable:
+            out.append((slug, title, desc))
+    return out
+
+
+# Дефолтные алерты, которые мы хотим, чтобы были включены у каждого
+# voice-бота из коробки. При первом открытии вкладки «Алерты» voice-бота
+# в компании они авто-bootstrap'ятся через `seed_default_voice_alerts`.
+DEFAULT_VOICE_ALERT_SLUGS: tuple[str, ...] = (
+    "voice_analysis_suggestions_prompt",
+    "voice_analysis_suggestions_tool",
+    "voice_change_applied_prompt",
+    "voice_change_applied_tool",
+)
+
 SCHEDULE_PRESETS: list[str] = [
     "Не запускать",
     "Каждые 5 минут",
@@ -350,6 +386,41 @@ def upsert_bot_alert(company_key: str, kind: str, alert: dict) -> dict:
 def delete_bot_alert(company_key: str, kind: str, alert_id: str) -> None:
     alerts = [a for a in get_bot_alerts(company_key, kind) if a.get("id") != alert_id]
     _set_bot_alerts(company_key, kind, alerts)
+
+
+def seed_default_voice_alerts(company_key: str) -> int:
+    """Гарантировать, что у компании в `bot_alerts[<company>]["voice"]`
+    есть все шаблоны из `DEFAULT_VOICE_ALERT_SLUGS` (event-trigger,
+    enabled=True). Не трогает уже существующие записи (по `template`)
+    — оператор может выключить их вручную, и они НЕ будут восстановлены.
+
+    Идемпотентно. Возвращает число добавленных записей.
+    """
+    existing = get_bot_alerts(company_key, "voice")
+    existing_templates = {
+        a.get("template") for a in existing if isinstance(a, dict)
+    }
+    added = 0
+    for slug in DEFAULT_VOICE_ALERT_SLUGS:
+        if slug in existing_templates:
+            continue
+        tpl = ALERT_TEMPLATE_BY_SLUG.get(slug)
+        if not tpl:
+            continue
+        upsert_bot_alert(company_key, "voice", {
+            "name": tpl[1],
+            "template": slug,
+            "trigger_mode": "event",
+            "schedule": "Не запускать",
+            "enabled": True,
+            "notes": (
+                "Событийный алерт — срабатывает после «Проанализировать» "
+                "во вкладке «Анализ звонков» или после Push в ElevenLabs. "
+                "Schedule игнорируется."
+            ),
+        })
+        added += 1
+    return added
 
 
 DEFAULT_AGENT_ALERTS: list[dict] = [

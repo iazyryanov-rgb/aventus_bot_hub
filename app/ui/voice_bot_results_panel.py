@@ -117,6 +117,117 @@ def _migrate_legacy_tool(company_key: str) -> None:
         pass
 
 
+def _normalize_tool_from_get(payload: dict) -> dict:
+    """Convert an ElevenLabs ``GET /v1/convai/tools/<id>`` response (the same
+    shape PATCH accepts back) into the **export-shape** that this panel and
+    `_save_tool` expect on disk.
+
+    ElevenLabs GET/PATCH shape:
+      * top-level wrapper ``{id, tool_config, access_info, usage_stats,
+        response_mocks}`` — real tool config lives under ``tool_config``;
+      * ``api_schema.request_headers`` is a dict ``{<name>: <value>}``;
+      * ``api_schema.path_params_schema`` = ``{}`` empty dict;
+      * ``api_schema.query_params_schema`` = ``None``;
+      * ``request_body_schema.properties`` is a dict keyed by property id,
+        per-prop ``required`` flag lives in the top-level ``required: [<id>, …]``;
+      * ``dynamic_variable_placeholders`` values are plain strings.
+
+    Export shape (what ``_props_by_id`` / the tree builder read on disk):
+      * tool dict has no wrapper — its keys are the same as ``tool_config``;
+      * ``request_headers`` is a list ``[{type:"value", name, value}, …]``;
+      * ``path_params_schema`` = ``[]``;
+      * ``query_params_schema`` = ``[]``;
+      * ``request_body_schema.properties`` is a list of dicts each carrying
+        ``id`` and ``value_type``; per-prop ``required: bool``;
+      * ``dynamic_variable_placeholders`` values are ``{type:"string_literal",
+        value:<str>}`` objects.
+
+    If ``payload`` is already in export-shape (no ``tool_config`` wrapper),
+    we return it untouched.
+    """
+    if not isinstance(payload, dict) or "tool_config" not in payload:
+        return payload
+    cfg = dict(payload.get("tool_config") or {})
+
+    api = dict(cfg.get("api_schema") or {})
+    # request_headers: dict → list
+    rh = api.get("request_headers")
+    if isinstance(rh, dict):
+        api["request_headers"] = [
+            {"type": "value", "name": str(k), "value": v}
+            for k, v in rh.items()
+        ]
+    # path_params_schema: {} → []
+    pps = api.get("path_params_schema")
+    if isinstance(pps, dict):
+        api["path_params_schema"] = []
+    # query_params_schema: None → []
+    if api.get("query_params_schema") is None:
+        api["query_params_schema"] = []
+
+    rbs = dict(api.get("request_body_schema") or {})
+    required_list = rbs.get("required")
+    required_set: set[str] = set()
+    if isinstance(required_list, list):
+        required_set = {str(x) for x in required_list}
+
+    props_dict = rbs.get("properties")
+    if isinstance(props_dict, dict):
+        props_list = []
+        for pid, prop in props_dict.items():
+            if not isinstance(prop, dict):
+                continue
+            out = dict(prop)
+            dyn = (out.get("dynamic_variable") or "").strip()
+            const = out.get("constant_value")
+            const_set = isinstance(const, str) and const != "" or (
+                const not in (None, "") and not isinstance(const, str)
+            )
+            if dyn:
+                vtype = "dynamic_variable"
+            elif const_set:
+                vtype = "constant"
+            else:
+                vtype = "llm_prompt"
+            out["id"] = pid
+            out["value_type"] = vtype
+            out["required"] = pid in required_set
+            props_list.append(out)
+        rbs["properties"] = props_list
+        # Top-level required → bool flag (legacy), real per-prop required
+        # now lives in each property dict.
+        rbs["required"] = False
+        rbs.setdefault("id", "body")
+        rbs.setdefault("value_type", "llm_prompt")
+    api["request_body_schema"] = rbs
+    cfg["api_schema"] = api
+
+    # dynamic_variable_placeholders: "" → {type, value}
+    dv = dict(cfg.get("dynamic_variables") or {})
+    placeholders = dv.get("dynamic_variable_placeholders")
+    if isinstance(placeholders, dict):
+        normalized = {}
+        for k, v in placeholders.items():
+            if isinstance(v, dict) and "value" in v:
+                normalized[k] = v
+            else:
+                normalized[k] = {
+                    "type": "string_literal",
+                    "value": str(v or ""),
+                }
+        dv["dynamic_variable_placeholders"] = normalized
+    cfg["dynamic_variables"] = dv
+
+    # Drop GET-only metadata fields.
+    cfg.pop("access_info", None)
+    cfg.pop("usage_stats", None)
+    # Keep response_mocks ONLY if it's already a list — but blank GET-side
+    # mocks tend to be empty; ElevenLabs accepts an empty list on PATCH.
+    if "response_mocks" not in cfg:
+        cfg["response_mocks"] = []
+    return cfg
+
+
 def _load_tool(
     company_key: str, sector: str = DEFAULT_SECTOR,
 ) -> Optional[dict]:
@@ -127,9 +238,13 @@ def _load_tool(
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    # If on-disk snapshot is in GET/PATCH-shape (e.g. an older Pull from
+    # ElevenLabs was saved as-is), normalize it once to export-shape so
+    # the tree builder + Push pipeline works uniformly.
+    return _normalize_tool_from_get(raw)
 
 
 def _save_tool(
@@ -1315,9 +1430,13 @@ class VoiceBotResultsPanel(ttk.Frame):
             )
             return
         # Persist override + write the tool snapshot to the standard path.
+        # ElevenLabs GET returns the GET/PATCH-shape (tool_config wrapper +
+        # dict-properties); normalize to export-shape before persisting so
+        # the tree builder picks up the fields it expects.
         set_tool_id_override(
             self._company.key, self._sector, "save_call_result", tool_id,
         )
+        tool = _normalize_tool_from_get(tool)
         try:
             _save_tool(self._company.key, tool, self._sector)
         except OSError as exc:

@@ -35,6 +35,11 @@ ALERT_TEMPLATES: list[tuple[str, str, str]] = [
     ("cohort_imbalance",      "⚖️ A/B router cohort imbalance",           "Сравнивает фактическую долю candidate-когорты (digits 0,1,2 по умолчанию) с ожидаемыми 30%. Алерт при отклонении ≥15pp — router сломан или gate сменили. Запуск раз в час."),
     ("crm_call_list_failed",  "📞 Коллист · ошибка отправки",             "Поллит CRM-таблицу dialer_process (Lendi-движок: AR/PE): алерт по новым строкам со state='error'. В сообщение идут campaign name, process id и last_error. Throttle через high-water mark по updated_at — каждый сбой репортится один раз."),
     ("wa_send_time_recommendation", "🕒 WA · лучшее время рассылки",       "Раз в сутки анализирует за последние 30 дней, в какие часы клиенты чаще всего открывают чат с ботом (= отвечают на mass-WA). Возвращает топ-3 часа отправки + ASCII-heatmap по часам. Запуск: «Раз в сутки» (рекомендуется ночь)."),
+    # ---- Voice bot · Call analysis (event-trigger, schedule игнорируется) ----
+    ("voice_analysis_suggestions_prompt", "🤖 Voice · Анализ звонков · правки в промте",     "Шлётся событийно сразу после «Проанализировать» во вкладке «Анализ звонков» voice-бота, если ИИ предложил правки в `main_prompt_blocks`. В TG уходит список title'ов с severity, summary и common_failures. Применение остаётся на оператора в той же вкладке."),
+    ("voice_analysis_suggestions_tool",   "🤖 Voice · Анализ звонков · правки в save_call_result", "Тот же триггер, но шлёт ТОЛЬКО предложения по `save_call_result` tool snapshot (description / enum / dynamic_variable / required). Раздельный шаблон, чтобы tool-команда и prompt-команда могли подписаться по-разному."),
+    ("voice_change_applied_prompt",       "📤 Voice · Промт залит в ElevenLabs",             "Шлётся событийно после успешного Push system_prompt в ElevenLabs из вкладки «Промпты». В TG уходит agent_id, длина каждого из 8 блоков и факт обновления. Никаких «предложений» — просто changelog."),
+    ("voice_change_applied_tool",         "📤 Voice · save_call_result залит в ElevenLabs",  "Шлётся событийно после успешного Push tool из вкладки «Результаты в CRM». В TG уходит tool_id, имя tool и сводка по properties."),
 ]
 
 ALERT_TEMPLATE_BY_SLUG = {slug: (slug, title, desc) for slug, title, desc in ALERT_TEMPLATES}

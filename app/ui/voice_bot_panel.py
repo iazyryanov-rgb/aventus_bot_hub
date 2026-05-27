@@ -29,9 +29,32 @@ from ..i18n import t
 from ..paths import data_dir
 from ..sectors import DEFAULT_SECTOR, SECTORS
 from ..voice_bot_config import (
-    SIP_DYNAMIC_VARS, enum_sets_from_tree, get_tool_id, load_config, save_config,
+    BLOCK_HELPS,
+    BLOCK_ORDER,
+    BLOCK_TITLES,
+    SIP_DYNAMIC_VARS,
+    block_vars_for,
+    enum_sets_from_tree,
+    get_tool_id,
+    join_blocks,
+    load_config,
+    save_config,
+    split_blocks,
 )
 from .colors import ERR_FG, META_FG, OK_FG, TBD_FG, TEXT_FG
+
+
+def _block_title(block_id: str) -> str:
+    """i18n заголовка блока. Дефолт — английский из BLOCK_TITLES."""
+    key = f"voice_bot_block_{block_id}"
+    val = t(key)
+    return val if val and val != key else BLOCK_TITLES.get(block_id, block_id)
+
+
+def _block_help(block_id: str) -> str:
+    key = f"voice_bot_block_{block_id}_help"
+    val = t(key)
+    return val if val and val != key else BLOCK_HELPS.get(block_id, "")
 
 
 _SIP_PLACEHOLDER_RE = re.compile(r"\{\{\s*(sip_[A-Za-z0-9_]+)\s*\}\}")
@@ -1295,9 +1318,12 @@ class VoiceBotPromptsPanel(ttk.Frame):
       * Header — компания, agent_id, кнопка задать API key.
       * Тулбар Pull / Push / Save / List agents — между ElevenLabs и
         локальным конфигом.
-      * Основной промт — большое текстовое поле (system prompt).
+      * Баннер «структура не распознана» — поднимается при Pull, если
+        промт ElevenLabs пришёл без block-anchors.
+      * Notebook с 8 вкладками для блоков system prompt.
       * First message — короткое текстовое поле.
       * Подсказка по dynamic_variables (SIP-headers из bridge-ноды).
+      * Валидатор: сверка SIP-vars и enum action_trees с tool snapshot.
     """
 
     def __init__(
@@ -1308,6 +1334,8 @@ class VoiceBotPromptsPanel(ttk.Frame):
         self._company = company
         self._sector = sector if sector in SECTORS else DEFAULT_SECTOR
         self._cfg: dict = load_config(company.key, self._sector)
+        # block_id → tk.Text. Заполняется в loop'е ниже.
+        self._block_texts: dict[str, tk.Text] = {}
 
         # ---- Заголовок + agent_id + API key dialog ----
         ttk.Label(
@@ -1371,13 +1399,56 @@ class VoiceBotPromptsPanel(ttk.Frame):
         self._status = ttk.Label(toolbar, text="", foreground=META_FG)
         self._status.pack(side="left", padx=(12, 0))
 
-        # ---- Основной промт ----
+        # ---- Баннер «структура не распознана» (по умолчанию скрыт) ----
+        self._unparsed_banner = ttk.Label(
+            self,
+            text=t("voice_bot_unparsed_banner"),
+            foreground=ERR_FG,
+            wraplength=900,
+            justify="left",
+        )
+        # pack-ится по требованию через _show_unparsed_banner.
+
+        # ---- Notebook со вкладками-блоками system prompt ----
         ttk.Label(
             self, text=t("voice_bot_prompt_main"), font=("Segoe UI", 9, "bold"),
         ).pack(anchor="w", padx=12, pady=(8, 2))
-        self._main_prompt = tk.Text(self, wrap="word")
-        self._main_prompt.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self._main_prompt.insert("1.0", str(self._cfg.get("main_prompt") or ""))
+        ttk.Label(
+            self, text=t("voice_bot_blocks_help"),
+            foreground=META_FG, wraplength=900, justify="left",
+        ).pack(anchor="w", padx=12, pady=(0, 4))
+
+        dyn_vars_for_blocks = list(
+            self._cfg.get("dynamic_variables") or SIP_DYNAMIC_VARS
+        )
+        block_vars_map = block_vars_for(dyn_vars_for_blocks)
+
+        blocks_nb = ttk.Notebook(self)
+        blocks_nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        cfg_blocks = self._cfg.get("main_prompt_blocks") or {}
+        for bid in BLOCK_ORDER:
+            tab = ttk.Frame(blocks_nb, padding=8)
+            blocks_nb.add(tab, text=_block_title(bid))
+
+            ttk.Label(
+                tab, text=_block_help(bid),
+                foreground=META_FG, wraplength=900, justify="left",
+            ).pack(anchor="w", pady=(0, 4))
+
+            relevant_vars = block_vars_map.get(bid) or ()
+            if relevant_vars:
+                ttk.Label(
+                    tab,
+                    text=t("voice_bot_block_vars_label") + ":  "
+                    + "  ".join(f"{{{{ {v} }}}}" for v in relevant_vars),
+                    foreground=TEXT_FG, font=("Consolas", 9),
+                    wraplength=900, justify="left",
+                ).pack(anchor="w", pady=(0, 4))
+
+            txt = tk.Text(tab, wrap="word")
+            txt.pack(fill="both", expand=True)
+            txt.insert("1.0", str(cfg_blocks.get(bid) or ""))
+            self._block_texts[bid] = txt
 
         # ---- First message ----
         ttk.Label(
@@ -1462,13 +1533,37 @@ class VoiceBotPromptsPanel(ttk.Frame):
         self._validator_status.pack(anchor="w")
 
         # Debounced refresh on prompt edit (300ms after last keystroke).
-        self._main_prompt.bind(
-            "<KeyRelease>", lambda _e: self._schedule_validator_refresh(),
-        )
+        for txt in self._block_texts.values():
+            txt.bind(
+                "<KeyRelease>", lambda _e: self._schedule_validator_refresh(),
+            )
         self._first_message.bind(
             "<KeyRelease>", lambda _e: self._schedule_validator_refresh(),
         )
         self._refresh_validator()
+
+    # ------------------------------------------------------------------
+    # Block helpers
+    # ------------------------------------------------------------------
+
+    def _collect_blocks(self) -> dict[str, str]:
+        return {
+            bid: self._block_texts[bid].get("1.0", "end").rstrip()
+            for bid in BLOCK_ORDER
+        }
+
+    def _joined_prompt_text(self) -> str:
+        """Полный system prompt = склейка всех 8 блоков (без anchors —
+        для валидатора, который ищет {{placeholders}} и enum-значения)."""
+        return "\n\n".join(
+            self._block_texts[bid].get("1.0", "end") for bid in BLOCK_ORDER
+        )
+
+    def _show_unparsed_banner(self, show: bool) -> None:
+        if show:
+            self._unparsed_banner.pack(fill="x", padx=12, pady=(0, 6))
+        else:
+            self._unparsed_banner.pack_forget()
 
     # ------------------------------------------------------------------
     # Validator
@@ -1491,7 +1586,7 @@ class VoiceBotPromptsPanel(ttk.Frame):
         self._enums_tree.delete(*self._enums_tree.get_children())
 
         prompt_text = (
-            self._main_prompt.get("1.0", "end")
+            self._joined_prompt_text()
             + "\n"
             + self._first_message.get("1.0", "end")
         )
@@ -1623,7 +1718,8 @@ class VoiceBotPromptsPanel(ttk.Frame):
     # ------------------------------------------------------------------
 
     def _sync_into_cfg(self) -> None:
-        self._cfg["main_prompt"] = self._main_prompt.get("1.0", "end").rstrip()
+        self._cfg["main_prompt_blocks"] = self._collect_blocks()
+        self._cfg.pop("main_prompt", None)  # старое поле больше не пишем
         self._cfg["first_message"] = self._first_message.get("1.0", "end").rstrip()
         self._cfg["elevenlabs_agent_id"] = self._agent_id_var.get().strip()
 
@@ -1811,18 +1907,27 @@ class VoiceBotPromptsPanel(ttk.Frame):
         ):
             self._status.configure(text=t("voice_bot_pull_cancelled"), foreground=META_FG)
             return
-        self._main_prompt.delete("1.0", "end")
-        self._main_prompt.insert("1.0", prompt)
+        blocks, recognized = split_blocks(prompt)
+        for bid in BLOCK_ORDER:
+            txt = self._block_texts[bid]
+            txt.delete("1.0", "end")
+            txt.insert("1.0", blocks.get(bid, ""))
         self._first_message.delete("1.0", "end")
         self._first_message.insert("1.0", first_msg)
-        self._status.configure(text=t("voice_bot_pulled"), foreground=OK_FG)
+        self._show_unparsed_banner(not recognized)
+        if recognized:
+            self._status.configure(text=t("voice_bot_pulled"), foreground=OK_FG)
+        else:
+            self._status.configure(
+                text=t("voice_bot_pulled_unparsed"), foreground=ERR_FG,
+            )
         self._refresh_validator()
 
     def _push_to_elevenlabs(self) -> None:
         if not self._require_key_and_id():
             return
         self._sync_into_cfg()
-        prompt = self._cfg.get("main_prompt") or ""
+        prompt = join_blocks(self._cfg.get("main_prompt_blocks") or {})
         first_msg = self._cfg.get("first_message") or ""
         if not prompt and not first_msg:
             messagebox.showwarning(
@@ -1876,6 +1981,17 @@ class VoiceBotPromptsPanel(ttk.Frame):
         # Локальный save после успешного push — фиксируем как «деплой».
         save_config(self._company.key, self._cfg, self._sector)
         self._status.configure(text=t("voice_bot_pushed"), foreground=OK_FG)
+        # Event-trigger: алерт о применённой правке в проде.
+        try:
+            from ..voice_bot_alerts import dispatch_prompt_pushed_alert
+            dispatch_prompt_pushed_alert(
+                self._company, self._sector,
+                agent_id=self._cfg.get("elevenlabs_agent_id") or "",
+                blocks=self._cfg.get("main_prompt_blocks") or {},
+                first_message=self._cfg.get("first_message") or "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[voice_bot_panel] prompt-pushed alert failed: {exc}")
 
     # ------------------------------------------------------------------
     # Guards

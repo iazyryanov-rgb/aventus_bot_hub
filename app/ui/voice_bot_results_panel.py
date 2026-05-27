@@ -1078,6 +1078,16 @@ class VoiceBotResultsPanel(ttk.Frame):
         self._status.configure(
             text=t("voice_bot_results_pushed"), foreground=OK_FG,
         )
+        # Event-trigger: алерт о применённой правке tool в проде.
+        try:
+            from ..voice_bot_alerts import dispatch_tool_pushed_alert
+            dispatch_tool_pushed_alert(
+                self._company, self._sector,
+                tool_id=self._tool_id or "",
+                tool=self._tool or {},
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[voice_bot_results_panel] tool-pushed alert failed: {exc}")
 
     # ------------------------------------------------------------------
     # Per-company key dialog

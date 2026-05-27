@@ -642,7 +642,21 @@ Important rules:
 Priority: System prompt rules > Knowledge base examples. If there is any conflict, follow the system prompt rules first."""
 
 
-_CO_OUTPUT_CLOSING = """# Short Final Closing Rule
+_CO_OUTPUT_CLOSING = """# === ADDENDUM: always-register ===
+REGLA OBLIGATORIA — REGISTRO DEL RESULTADO EN TODOS LOS CASOS
+Antes de cualquier `end_call` SIEMPRE se debe llamar a `save_call_result`. Esta regla NO tiene excepciones:
+- Si el cliente prometió pagar dentro de 3 días → contact_result = result_promise_of_payment, promise_type/promise_date/promise_amount completos.
+- Si el cliente prometió pagar después de 3 días (por ejemplo «el viernes», «la próxima semana», «en 5 días») → contact_result = result_promise_of_payment IGUAL; promise_date debe ser la fecha real prometida por el cliente, no «dentro de 3 días»; no rechazar la promesa por estar fuera del plazo, registrarla tal cual.
+- Si el cliente se negó a pagar o no se comprometió a ninguna fecha → contact_result = result_refusal_to_pay (o result_call_back_later si pidió otra llamada).
+- Si fue número equivocado / persona equivocada → contact_result = result_hung_up con contact_type = contact_negative o third_party según corresponda.
+- Si fue buzón de voz, sin respuesta, silencio, ocupado, drop → elegir el `result_*` correspondiente del bloque «contact_negative».
+- Si el cliente disputa el préstamo → contact_result = result_hung_up (contacto cerrado) y comment con la disputa.
+- Si la conversación se cortó por abuso → contact_result = result_hung_up con comment indicando «llamada terminada por insultos».
+
+NUNCA terminar la llamada sin registrar el resultado. Mapear cualquier escenario al `contact_result` más cercano del enum, aunque la coincidencia no sea perfecta. Es preferible un registro aproximado a un fin de llamada sin registro.
+# === END ADDENDUM ===
+
+# Short Final Closing Rule
 After the customer confirms the payment arrangement, do not repeat consequences again.
 Say only:
 "Gracias por confirmar. Por favor realice el pago según lo acordado. Que tenga un buen día."

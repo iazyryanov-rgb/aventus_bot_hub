@@ -633,6 +633,32 @@ class VoiceBotCallAnalysisPanel(ttk.Frame):
         prev_applied.update(a for a in applied_ids if a)
         state["applied_ids"] = sorted(prev_applied)
         save_analysis_state(self._company.key, self._sector, state)
+        # Snapshot the post-apply state of the prompt blocks as a
+        # version of kind="analysis" so the operator can roll back to
+        # this exact AI-applied combination later via the «Версии»
+        # dialog in Prompts.
+        if ok_n > 0:
+            try:
+                from ..voice_bot_config import load_config
+                from ..voice_bot_prompt_versions import KIND_ANALYSIS, save_version
+                cfg_after = load_config(self._company.key, self._sector)
+                save_version(
+                    self._company.key, self._sector, KIND_ANALYSIS,
+                    blocks=cfg_after.get("main_prompt_blocks") or {},
+                    first_message=cfg_after.get("first_message") or "",
+                    meta={
+                        "applied_ids": [s.get("id") for s in (sg["sg"] for sg in selected)],
+                        "applied_titles": [
+                            sg["sg"].get("title") or "" for sg in selected
+                        ],
+                        "analysis_ran_at": int(
+                            (load_analysis_state(self._company.key, self._sector) or {})
+                            .get("ran_at_ts") or 0
+                        ),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[voice_bot_call_analysis] save Analysis version failed: {exc}")
         # re-render to disable applied rows
         if state.get("result"):
             self._render_result(state["result"], state)

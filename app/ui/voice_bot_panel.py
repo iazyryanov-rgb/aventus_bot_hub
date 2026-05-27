@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from typing import Optional
@@ -1396,6 +1397,10 @@ class VoiceBotPromptsPanel(ttk.Frame):
         ttk.Button(
             toolbar, text=t("btn_save"), command=self._save_local,
         ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            toolbar, text=t("voice_bot_versions_button"),
+            command=self._open_versions_dialog,
+        ).pack(side="left", padx=(6, 0))
         self._status = ttk.Label(toolbar, text="", foreground=META_FG)
         self._status.pack(side="left", padx=(12, 0))
 
@@ -1922,6 +1927,24 @@ class VoiceBotPromptsPanel(ttk.Frame):
                 text=t("voice_bot_pulled_unparsed"), foreground=ERR_FG,
             )
         self._refresh_validator()
+        # Snapshot the pulled state so the operator can roll back later
+        # via the «Версии» dialog. Idempotent — skip if identical to the
+        # previous elevenlabs-kind version.
+        try:
+            from ..voice_bot_prompt_versions import KIND_ELEVENLABS, save_version
+            save_version(
+                self._company.key, self._sector, KIND_ELEVENLABS,
+                blocks=blocks, first_message=first_msg,
+                meta={
+                    "source": "pull",
+                    "agent_id": self._cfg.get("elevenlabs_agent_id") or "",
+                    "agent_name": agent.get("name") or "",
+                    "raw_prompt_len": len(prompt),
+                    "recognized_blocks": bool(recognized),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[voice_bot_panel] save Pulled version failed: {exc}")
 
     def _push_to_elevenlabs(self) -> None:
         if not self._require_key_and_id():
@@ -1992,6 +2015,137 @@ class VoiceBotPromptsPanel(ttk.Frame):
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[voice_bot_panel] prompt-pushed alert failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # Versions dialog
+    # ------------------------------------------------------------------
+
+    def _open_versions_dialog(self) -> None:
+        from ..voice_bot_prompt_versions import (
+            KIND_ANALYSIS,
+            KIND_ELEVENLABS,
+            list_versions,
+        )
+        dialog = tk.Toplevel(self.winfo_toplevel())
+        dialog.title(t("voice_bot_versions_dialog_title"))
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ttk.Label(
+            dialog, text=t("voice_bot_versions_help"),
+            foreground=META_FG, wraplength=720, justify="left",
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+
+        body = ttk.Frame(dialog, padding=8)
+        body.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+
+        # Two side-by-side lists: ElevenLabs (pulled) | Analysis (applied)
+        sections = [
+            (KIND_ELEVENLABS, t("voice_bot_versions_kind_elevenlabs")),
+            (KIND_ANALYSIS,   t("voice_bot_versions_kind_analysis")),
+        ]
+        trees: dict[str, ttk.Treeview] = {}
+        for col_i, (kind, title) in enumerate(sections):
+            col = ttk.LabelFrame(body, text=title, padding=6)
+            col.grid(row=0, column=col_i, sticky="nsew", padx=4)
+            body.grid_columnconfigure(col_i, weight=1)
+            tree = ttk.Treeview(
+                col, columns=("when", "info"), show="headings", height=10,
+            )
+            tree.heading("when", text=t("voice_bot_versions_col_when"))
+            tree.heading("info", text=t("voice_bot_versions_col_info"))
+            tree.column("when", width=140, anchor="w", stretch=False)
+            tree.column("info", width=320, anchor="w")
+            tree.pack(fill="both", expand=True)
+            trees[kind] = tree
+
+        body.grid_rowconfigure(0, weight=1)
+
+        # Populate
+        row_to_version: dict[str, "PromptVersion"] = {}  # noqa: F821
+        for kind, _ in sections:
+            tree = trees[kind]
+            versions = list_versions(
+                self._company.key, self._sector, kind=kind,
+            )
+            for v in versions:
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(v.ts))
+                info_bits: list[str] = []
+                meta = v.meta or {}
+                if kind == KIND_ELEVENLABS:
+                    if meta.get("agent_name"):
+                        info_bits.append(str(meta["agent_name"]))
+                    if meta.get("raw_prompt_len") is not None:
+                        info_bits.append(
+                            f"{int(meta['raw_prompt_len'])} chars",
+                        )
+                    if meta.get("recognized_blocks") is False:
+                        info_bits.append("unparsed")
+                else:
+                    aids = meta.get("applied_ids") or []
+                    if aids:
+                        info_bits.append(
+                            t("voice_bot_versions_applied_n").format(
+                                n=len([a for a in aids if a]),
+                            ),
+                        )
+                info = "  ·  ".join(info_bits) if info_bits else "—"
+                iid = tree.insert("", "end", values=(when, info))
+                row_to_version[f"{kind}::{iid}"] = v
+
+        # Buttons
+        btn_row = ttk.Frame(dialog)
+        btn_row.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _selected_version() -> Optional["PromptVersion"]:  # noqa: F821
+            for kind, _ in sections:
+                tree = trees[kind]
+                sel = tree.selection()
+                if sel:
+                    return row_to_version.get(f"{kind}::{sel[0]}")
+            return None
+
+        def _restore() -> None:
+            v = _selected_version()
+            if v is None:
+                messagebox.showinfo(
+                    t("voice_bot_versions_dialog_title"),
+                    t("voice_bot_versions_no_selection"),
+                    parent=dialog,
+                )
+                return
+            ok = messagebox.askyesno(
+                t("voice_bot_versions_dialog_title"),
+                t("voice_bot_versions_restore_confirm").format(
+                    label=v.label,
+                ),
+                parent=dialog,
+            )
+            if not ok:
+                return
+            for bid in BLOCK_ORDER:
+                txt = self._block_texts[bid]
+                txt.delete("1.0", "end")
+                txt.insert("1.0", v.main_prompt_blocks.get(bid, ""))
+            self._first_message.delete("1.0", "end")
+            self._first_message.insert("1.0", v.first_message)
+            self._show_unparsed_banner(False)
+            self._status.configure(
+                text=t("voice_bot_versions_restored").format(label=v.label),
+                foreground=OK_FG,
+            )
+            self._refresh_validator()
+            dialog.destroy()
+
+        ttk.Button(
+            btn_row, text=t("btn_cancel"), command=dialog.destroy,
+        ).pack(side="right")
+        ttk.Button(
+            btn_row, text=t("voice_bot_versions_restore"), command=_restore,
+            style="Accent.TButton",
+        ).pack(side="right", padx=(0, 6))
+
+        dialog.geometry("980x440")
 
     # ------------------------------------------------------------------
     # Guards
